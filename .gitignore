@@ -1,1 +1,14 @@
-﻿
+# Maven build output
+target/
+
+# IDE files
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment (keep API keys out)
+*.env
+.env.local

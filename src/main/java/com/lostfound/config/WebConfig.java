@@ -15,6 +15,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebConfig implements WebMvcConfigurer {
 
     private final JwtInterceptor jwtInterceptor;
+    private final RateLimitInterceptor rateLimitInterceptor;
 
     /** CORS — 开发阶段允许所有来源 */
     @Override
@@ -34,8 +35,11 @@ public class WebConfig implements WebMvcConfigurer {
                 // 放行不需要登录的接口
                 .excludePathPatterns(
                         "/api/user/register",
-                        "/api/user/login",
-                        "/api/ai/chat"      // AI 问答
+                        "/api/user/login"
                 );
+
+        // 限流拦截器 — 仅拦截 AI 接口（在 JWT 之后执行）
+        registry.addInterceptor(rateLimitInterceptor)
+                .addPathPatterns("/api/ai/**");
     }
 }
