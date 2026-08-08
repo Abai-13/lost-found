@@ -91,7 +91,10 @@ mvn test                                   # 运行测试
 | 08-06 | 🔧 完成：分页查询加 sortOrder 排序选项（ItemPageQuery + Service if-else） | 🟢 完成 | ✅ 能讲 |
 | 08-06 | 📝 面试手册新增：Spring 启动流程、依赖注入、排序功能 → docs/interview-qa.md | — | — |
 | 08-04 | 面试问答手册 → docs/interview-qa.md | — | — |
-| — | AI 大模型接入 | ⬜ 待开发 | — |
+| 08-07 | 🔧 Git & GitHub：init/add/commit/push/remote/branch，项目已推送至 github.com/Abai-13 | 🟢 完成 | ✅ 能讲 |
+| 08-07 | 📝 简历制作：HTML版（投德物）+ 通用版MD（投其他），岗位适配策略 | 🟢 完成 | — |
+| 08-08 | 🔄 面试全面复习：JWT 认证、全局异常、分页查询、两层防护、BCrypt、依赖注入、启动入口、分层架构 | 🟢 掌握 | ✅ 能讲 |
+| 08-08 | ✅ AI 大模型接入：DeepSeek API + RestTemplate + 限流拦截器 + 降级处理 | 🟢 完成 | ✅ 能讲 |
 | — | AI 物品匹配 | ⬜ 待开发 | — |
 
 ---
