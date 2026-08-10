@@ -14,6 +14,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.List;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -22,7 +24,7 @@ public class ItemServiceImpl implements ItemService {
     private final ItemMapper itemMapper;
 
     @Override
-    public Item publish(Long userId, ItemCreateRequest request) {
+    public Item publish(Long userId, ItemCreateRequest request, String imageUrl) {
         // 校验 type 取值
         if (!"LOST".equals(request.getType()) && !"FOUND".equals(request.getType())) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "物品类型只能为 LOST 或 FOUND");
@@ -35,6 +37,7 @@ public class ItemServiceImpl implements ItemService {
         item.setCategory(request.getCategory());
         item.setLocation(request.getLocation());
         item.setDescription(request.getDescription());
+        item.setImageUrl(imageUrl);
         item.setContact(request.getContact());
         item.setStatus("UNCLAIMED");
 
@@ -91,5 +94,30 @@ public class ItemServiceImpl implements ItemService {
         item.setStatus(status);
         itemMapper.updateById(item);
         log.info("物品状态更新: id={}, status={}", itemId, status);
+    }
+
+    @Override
+    public List<Item> selectList(ItemPageQuery query) {
+        LambdaQueryWrapper<Item> wrapper = new LambdaQueryWrapper<>();
+
+        if (StringUtils.hasText(query.getType())) {
+            wrapper.eq(Item::getType, query.getType());
+        }
+        if (StringUtils.hasText(query.getCategory())) {
+            wrapper.eq(Item::getCategory, query.getCategory());
+        }
+        if (StringUtils.hasText(query.getStatus())) {
+            wrapper.eq(Item::getStatus, query.getStatus());
+        }
+        if (StringUtils.hasText(query.getKeyword())) {
+            wrapper.like(Item::getTitle, query.getKeyword());
+        }
+        if ("ASC".equals(query.getUpordown())) {
+            wrapper.orderByAsc(Item::getCreatedAt);
+        }else {
+            wrapper.orderByDesc(Item::getCreatedAt);
+        }
+
+        return itemMapper.selectList(wrapper);
     }
 }

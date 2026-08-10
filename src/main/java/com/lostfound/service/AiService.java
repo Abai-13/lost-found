@@ -11,4 +11,7 @@ public interface AiService {
      * @return AI 回答文本
      */
     String chat(String question);
+
+    /**调用Ai接口查询物品*/
+    String query(String question);
 }

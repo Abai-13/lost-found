@@ -31,4 +31,14 @@ public class AiController {
         String answer = aiService.chat(request.getQuestion());
         return Result.ok(Map.of("answer", answer));
     }
+
+    /** AI根据用户询问信息查询未认领物品数据 */
+    @PostMapping("/query")
+    public Result<Map<String, String>> query(@Valid @RequestBody ChatRequest request,
+                                            HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        log.info("用户 {} 发起 AI 问答: {}", userId, request.getQuestion());
+        String answer = aiService.query(request.getQuestion());
+        return Result.ok(Map.of("answer", answer));
+    }
 }
