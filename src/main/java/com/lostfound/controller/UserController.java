@@ -38,6 +38,9 @@ public class UserController {
     @GetMapping("/me")
     public Result<User> me(HttpServletRequest request) {
         Long userId = (Long) request.getAttribute("userId");
+        if (userId == null) {
+            return Result.unauthorized();
+        }
         User user = userService.getUserById(userId);
         // 安全：不返回密码字段
         user.setPassword(null);
