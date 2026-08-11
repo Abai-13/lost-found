@@ -97,6 +97,34 @@ public class ItemServiceImpl implements ItemService {
     }
 
     @Override
+    public Page<Item> pageByUserId(Long userId, ItemPageQuery query) {
+        LambdaQueryWrapper<Item> wrapper = new LambdaQueryWrapper<>();
+        // 核心：只查当前用户的物品
+        wrapper.eq(Item::getUserId, userId);
+
+        if (StringUtils.hasText(query.getType())) {
+            wrapper.eq(Item::getType, query.getType());
+        }
+        if (StringUtils.hasText(query.getCategory())) {
+            wrapper.eq(Item::getCategory, query.getCategory());
+        }
+        if (StringUtils.hasText(query.getStatus())) {
+            wrapper.eq(Item::getStatus, query.getStatus());
+        }
+        if (StringUtils.hasText(query.getKeyword())) {
+            wrapper.like(Item::getTitle, query.getKeyword());
+        }
+        if ("ASC".equals(query.getUpordown())) {
+            wrapper.orderByAsc(Item::getCreatedAt);
+        } else {
+            wrapper.orderByDesc(Item::getCreatedAt);
+        }
+
+        return itemMapper.selectPage(
+                new Page<>(query.getPage(), query.getSize()), wrapper);
+    }
+
+    @Override
     public List<Item> selectList(ItemPageQuery query) {
         LambdaQueryWrapper<Item> wrapper = new LambdaQueryWrapper<>();
 

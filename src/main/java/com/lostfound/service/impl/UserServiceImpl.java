@@ -79,4 +79,13 @@ public class UserServiceImpl implements UserService {
         User user = userMapper.selectById(userId);
         return user != null ? user.getNickname() : "未知用户";
     }
+
+    @Override
+    public User getUserById(Long userId) {
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "用户不存在");
+        }
+        return user;
+    }
 }

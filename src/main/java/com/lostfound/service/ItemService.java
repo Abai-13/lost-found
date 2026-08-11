@@ -21,6 +21,9 @@ public interface ItemService {
     /** 更新物品状态（如标记为已认领） */
     void updateStatus(Long itemId, Long userId, String status);
 
+    /** 分页查询当前用户的物品列表（个人中心用） */
+    Page<Item> pageByUserId(Long userId, ItemPageQuery query);
+
     /** 查询所有未被认领的物品信息 */
     List<Item> selectList(ItemPageQuery query);
 }

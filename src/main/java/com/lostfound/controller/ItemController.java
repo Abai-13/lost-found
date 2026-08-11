@@ -67,6 +67,23 @@ public class ItemController {
         return Result.ok(result);
     }
 
+    /** 我的发布列表（需登录） */
+    @GetMapping("/my")
+    public Result<Map<String, Object>> myItems(ItemPageQuery query,
+                                               HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        if (userId == null) {
+            return Result.unauthorized();
+        }
+        Page<Item> page = itemService.pageByUserId(userId, query);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("records", page.getRecords());
+        result.put("total", page.getTotal());
+        result.put("page", page.getCurrent());
+        result.put("size", page.getSize());
+        return Result.ok(result);
+    }
+
     /** 修改物品状态（需登录，仅发布者本人） */
     @PutMapping("/{id}/status")
     public Result<String> updateStatus(@PathVariable Long id,

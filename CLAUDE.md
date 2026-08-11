@@ -107,27 +107,27 @@ mvn test                                   # 运行测试
 | 08-11 | 📝 README.md 编写 + Git push | 🟢 完成 | ✅ |
 | 08-11 | 📝 简历更新：通用版→模板版+投递版，去掉 AI 味，期望薪资 15-25K | 🟢 完成 | — |
 | 08-11 | 🎯 秋招规划：岗位搜索策略（搜"后端"不搜"Java"）、中厂投递清单（挚文/得物/招银） | 🟢 完成 | — |
-| 08-11 | 🔧 个人中心（进行中）：UserService 增加 getUserById 接口定义 | 🟡 进行中 | — |
+| 08-11 | 🔧 个人中心：UserService.getUserById + GET /api/user/me + ItemService.pageByUserId + GET /api/item/my | 🟢 完成 | ⚠️ 需练习 |
 
 ---
 
 ## ⚠️ 下次新对话必须从这里继续（重要）
 
-**当前状态（08-11）：个人中心做到一半，代码改动如下：**
+**当前状态（08-11）：个人中心代码已完成，编译通过 ✅**
 
 ### 已完成的改动
-- ✅ `UserService.java` 接口：新增 `User getUserById(Long userId)` 声明 + import `User` 实体
-- ✅ README.md 已 push 到 GitHub
-- ✅ 简历模板 + 投递版已写好
+- ✅ `UserServiceImpl.java`：实现 `getUserById(Long userId)`（selectById，不存在抛 BusinessException）
+- ✅ `UserController.java`：新增 `GET /api/user/me`，返回当前用户信息（password 置 null）
+- ✅ `ItemService.java` 接口：新增 `Page<Item> pageByUserId(Long userId, ItemPageQuery query)`
+- ✅ `ItemServiceImpl.java`：实现 pageByUserId，在原有筛选逻辑上加 `wrapper.eq(Item::getUserId, userId)`
+- ✅ `ItemController.java`：新增 `GET /api/item/my`，返回当前用户发布的分页列表
+- ✅ Maven 编译通过
 
 ### 下次接着做的步骤（按顺序）
-1. `UserServiceImpl.java`：实现 `getUserById(Long userId)` 方法（selectById，不存在抛异常）
-2. `UserController.java`：加 `GET /api/user/me`，从 request 拿 userId，调 userService.getUserById，返回用户信息（去掉 password 字段）
-3. `ItemService.java` 接口：新增 `Page<Item> pageByUserId(Long userId, ItemPageQuery query)` 方法
-4. `ItemServiceImpl.java`：实现 pageByUserId，在原有 page() 逻辑上加 `wrapper.eq(Item::getUserId, userId)`
-5. `ItemController.java`：加 `GET /api/item/my`，从 request 拿 userId（null 就返回 401），调 itemService.pageByUserId，返回分页结果
-6. Maven 编译 + Postman 测试
-7. Git commit + push
+1. Postman 测试：`GET /api/user/me` 和 `GET /api/item/my`
+2. Git commit + push
+3. 模拟面试：个人中心涉及的新知识点
+4. 接口测试（Day 3 计划）
 
 ---
 
