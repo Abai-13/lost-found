@@ -48,26 +48,7 @@ public class ItemServiceImpl implements ItemService {
 
     @Override
     public Page<Item> page(ItemPageQuery query) {
-        LambdaQueryWrapper<Item> wrapper = new LambdaQueryWrapper<>();
-
-        if (StringUtils.hasText(query.getType())) {
-            wrapper.eq(Item::getType, query.getType());
-        }
-        if (StringUtils.hasText(query.getCategory())) {
-            wrapper.eq(Item::getCategory, query.getCategory());
-        }
-        if (StringUtils.hasText(query.getStatus())) {
-            wrapper.eq(Item::getStatus, query.getStatus());
-        }
-        if (StringUtils.hasText(query.getKeyword())) {
-            wrapper.like(Item::getTitle, query.getKeyword());
-        }
-        if ("ASC".equals(query.getUpordown())) {
-            wrapper.orderByAsc(Item::getCreatedAt);
-        }else {
-            wrapper.orderByDesc(Item::getCreatedAt);
-        }
-
+        LambdaQueryWrapper<Item> wrapper = buildQueryWrapper(query);
         return itemMapper.selectPage(
                 new Page<>(query.getPage(), query.getSize()), wrapper);
     }
@@ -98,9 +79,24 @@ public class ItemServiceImpl implements ItemService {
 
     @Override
     public Page<Item> pageByUserId(Long userId, ItemPageQuery query) {
-        LambdaQueryWrapper<Item> wrapper = new LambdaQueryWrapper<>();
-        // 核心：只查当前用户的物品
+        LambdaQueryWrapper<Item> wrapper = buildQueryWrapper(query);
+        // 在公共筛选基础上，限定当前用户
         wrapper.eq(Item::getUserId, userId);
+        return itemMapper.selectPage(
+                new Page<>(query.getPage(), query.getSize()), wrapper);
+    }
+
+    @Override
+    public List<Item> selectList(ItemPageQuery query) {
+        LambdaQueryWrapper<Item> wrapper = buildQueryWrapper(query);
+        return itemMapper.selectList(wrapper);
+    }
+
+    // ===================== 私有方法 =====================
+
+    /** 构建公共查询条件（type/category/status/keyword/排序） */
+    private LambdaQueryWrapper<Item> buildQueryWrapper(ItemPageQuery query) {
+        LambdaQueryWrapper<Item> wrapper = new LambdaQueryWrapper<>();
 
         if (StringUtils.hasText(query.getType())) {
             wrapper.eq(Item::getType, query.getType());
@@ -120,32 +116,6 @@ public class ItemServiceImpl implements ItemService {
             wrapper.orderByDesc(Item::getCreatedAt);
         }
 
-        return itemMapper.selectPage(
-                new Page<>(query.getPage(), query.getSize()), wrapper);
-    }
-
-    @Override
-    public List<Item> selectList(ItemPageQuery query) {
-        LambdaQueryWrapper<Item> wrapper = new LambdaQueryWrapper<>();
-
-        if (StringUtils.hasText(query.getType())) {
-            wrapper.eq(Item::getType, query.getType());
-        }
-        if (StringUtils.hasText(query.getCategory())) {
-            wrapper.eq(Item::getCategory, query.getCategory());
-        }
-        if (StringUtils.hasText(query.getStatus())) {
-            wrapper.eq(Item::getStatus, query.getStatus());
-        }
-        if (StringUtils.hasText(query.getKeyword())) {
-            wrapper.like(Item::getTitle, query.getKeyword());
-        }
-        if ("ASC".equals(query.getUpordown())) {
-            wrapper.orderByAsc(Item::getCreatedAt);
-        }else {
-            wrapper.orderByDesc(Item::getCreatedAt);
-        }
-
-        return itemMapper.selectList(wrapper);
+        return wrapper;
     }
 }
