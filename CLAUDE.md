@@ -108,26 +108,35 @@ mvn test                                   # 运行测试
 | 08-11 | 📝 简历更新：通用版→模板版+投递版，去掉 AI 味，期望薪资 15-25K | 🟢 完成 | — |
 | 08-11 | 🎯 秋招规划：岗位搜索策略（搜"后端"不搜"Java"）、中厂投递清单（挚文/得物/招银） | 🟢 完成 | — |
 | 08-11 | 🔧 个人中心：UserService.getUserById + GET /api/user/me + ItemService.pageByUserId + GET /api/item/my | 🟢 完成 | ⚠️ 需练习 |
+| 08-11 | 🎤 模拟面试 5 题：数据流/密码置空/代码重复/索引/权限设计 | 🟢 完成 | ⚠️ 需练习 |
+| 08-11 | ♻️ 重构：抽取 buildQueryWrapper 消除三段重复代码 | 🟢 完成 | ✅ |
+| 08-12 | 📋 计划：乐观锁 + Docker + Redis 三个面试亮点冲刺 | ⬜ 待做 | — |
 
 ---
 
 ## ⚠️ 下次新对话必须从这里继续（重要）
 
-**当前状态（08-11）：个人中心代码已完成，编译通过 ✅**
+**当前状态（08-11）：核心功能全部完成，接下来冲刺面试亮点（乐观锁 → Docker → Redis）**
 
-### 已完成的改动
-- ✅ `UserServiceImpl.java`：实现 `getUserById(Long userId)`（selectById，不存在抛 BusinessException）
-- ✅ `UserController.java`：新增 `GET /api/user/me`，返回当前用户信息（password 置 null）
-- ✅ `ItemService.java` 接口：新增 `Page<Item> pageByUserId(Long userId, ItemPageQuery query)`
-- ✅ `ItemServiceImpl.java`：实现 pageByUserId，在原有筛选逻辑上加 `wrapper.eq(Item::getUserId, userId)`
-- ✅ `ItemController.java`：新增 `GET /api/item/my`，返回当前用户发布的分页列表
-- ✅ Maven 编译通过
+### 08-12 一天冲刺计划
 
-### 下次接着做的步骤（按顺序）
-1. Postman 测试：`GET /api/user/me` 和 `GET /api/item/my`
-2. Git commit + push
-3. 模拟面试：个人中心涉及的新知识点
-4. 接口测试（Day 3 计划）
+| 时间 | 任务 | 知识点 | 预计 |
+|:---:|------|------|:---:|
+| 上午 | **乐观锁** | version 字段、CAS、并发认领冲突 | 2h |
+| 下午 | **Docker 部署** | Dockerfile、docker-compose、容器化 | 2h |
+| 晚上 | **Redis 缓存** | 热点缓存、缓存穿透/雪崩、淘汰策略 | 3h |
+
+每个亮点按三层教学法：**我讲原理 → 你讲给面试官听 → 你动手写代码**
+
+### 每日节奏建议（08-12 起）
+- 上午：项目新功能（2-3h）
+- 下午：投简历 + 复习面试题（1-2h）
+- 晚上：八股 + 力扣（2h）
+
+### 明天启动步骤
+1. 读 CLAUDE.md 了解进度
+2. 从乐观锁开始，按三层教学法推进
+3. 每完成一个亮点，编译 + 测试 + Git commit
 
 ---
 
