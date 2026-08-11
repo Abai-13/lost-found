@@ -2,6 +2,7 @@ package com.lostfound.service;
 
 import com.lostfound.dto.LoginResponse;
 import com.lostfound.dto.RegisterRequest;
+import com.lostfound.entity.User;
 
 public interface UserService {
 
@@ -13,4 +14,7 @@ public interface UserService {
 
     /** 根据 ID 查询用户名等信息（用于展示发帖人） */
     String getNicknameById(Long userId);
+
+    /** 根据 ID 查询用户完整信息（不含密码） */
+    User getUserById(Long userId);
 }
