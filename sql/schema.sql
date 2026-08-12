@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS `item` (
     `image_url`   VARCHAR(500) DEFAULT NULL COMMENT '物品图片URL',
     `contact`     VARCHAR(100) DEFAULT NULL COMMENT '联系方式',
     `status`      VARCHAR(20)  NOT NULL DEFAULT 'UNCLAIMED' COMMENT '状态: UNCLAIMED(未认领) / CLAIMED(已认领)',
+    `version`     INT          NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
     `created_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX `idx_user_id`   (`user_id`),

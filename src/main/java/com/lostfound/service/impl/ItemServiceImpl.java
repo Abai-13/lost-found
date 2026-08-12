@@ -64,17 +64,33 @@ public class ItemServiceImpl implements ItemService {
 
     @Override
     public void updateStatus(Long itemId, Long userId, String status) {
-        Item item = itemMapper.selectById(itemId);
-        if (item == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "物品不存在");
+        // 乐观锁 + 重试：最多重试 3 次，防止并发认领冲突
+        int maxRetries = 3;
+        for (int i = 0; i < maxRetries; i++) {
+            Item item = itemMapper.selectById(itemId);
+            if (item == null) {
+                throw new BusinessException(ResultCode.NOT_FOUND, "物品不存在");
+            }
+            // 只有发布者本人才能修改状态
+            if (!item.getUserId().equals(userId)) {
+                throw new BusinessException(ResultCode.FORBIDDEN, "只能修改自己发布的物品");
+            }
+            // 如果状态已经是目标状态，则无需修改，直接返回
+            if(item.getStatus().equals(status)) {
+                return;
+            }
+            item.setStatus(status);
+            int rows = itemMapper.updateById(item);
+            if (rows > 0) {
+                // 更新成功 — MyBatis-Plus 自动将 version + 1
+                log.info("物品状态更新: id={}, status={}, version={}", itemId, status, item.getVersion());
+                return;
+            }
+            // rows = 0 说明 version 已变化 → 被别人抢先了，重试
+            log.warn("乐观锁冲突，第 {} 次重试: id={}", i + 1, itemId);
         }
-        // 只有发布者本人才能修改状态
-        if (!item.getUserId().equals(userId)) {
-            throw new BusinessException(ResultCode.FORBIDDEN, "只能修改自己发布的物品");
-        }
-        item.setStatus(status);
-        itemMapper.updateById(item);
-        log.info("物品状态更新: id={}, status={}", itemId, status);
+        // 3 次都冲突 → 告诉用户重试
+        throw new BusinessException(ResultCode.INTERNAL_ERROR, "操作冲突，请稍后重试");
     }
 
     @Override

@@ -33,6 +33,10 @@ public class Item {
     /** UNCLAIMED: 未认领, CLAIMED: 已认领 */
     private String status;
 
+    /** 乐观锁版本号 — 每次更新自增 1，防止并发覆盖 */
+    @Version
+    private Integer version;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 
