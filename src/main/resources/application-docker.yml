@@ -1,0 +1,22 @@
+# Docker 环境配置（会覆盖 application.yml 中的对应配置）
+server:
+  port: 8080
+
+spring:
+  datasource:
+    # Docker 内部网络用服务名 "mysql" 而不是 localhost
+    url: jdbc:mysql://mysql:3306/lost_found?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
+    username: root
+    password: ${MYSQL_ROOT_PASSWORD:root123}
+
+# Docker 环境关闭 MyBatis SQL 日志（生产环境不需要）
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+
+# Docker 环境 Redis 使用服务名访问
+spring:
+  data:
+    redis:
+      host: redis                # docker-compose 里的服务名
+      port: 6379

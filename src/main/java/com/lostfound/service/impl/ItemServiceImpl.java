@@ -11,6 +11,9 @@ import com.lostfound.mapper.ItemMapper;
 import com.lostfound.service.ItemService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -24,6 +27,10 @@ public class ItemServiceImpl implements ItemService {
     private final ItemMapper itemMapper;
 
     @Override
+    @Caching(evict = {
+            @CacheEvict(value = "itemPage", allEntries = true),// 新物品发布，清空所有分页缓存
+            @CacheEvict(value = "itemMypage", allEntries = true)// 新物品发布，清空所有我的发布缓存)
+    })
     public Item publish(Long userId, ItemCreateRequest request, String imageUrl) {
         // 校验 type 取值
         if (!"LOST".equals(request.getType()) && !"FOUND".equals(request.getType())) {
@@ -47,6 +54,7 @@ public class ItemServiceImpl implements ItemService {
     }
 
     @Override
+    @Cacheable(value = "itemPage", key = "#query.page + ':' + #query.size + ':' + #query.type + ':' + #query.category + ':' + #query.keyword + ':' + #query.status + ':' + #query.upordown")
     public Page<Item> page(ItemPageQuery query) {
         LambdaQueryWrapper<Item> wrapper = buildQueryWrapper(query);
         return itemMapper.selectPage(
@@ -54,6 +62,7 @@ public class ItemServiceImpl implements ItemService {
     }
 
     @Override
+    @Cacheable(value = "itemDetail", key = "#id")
     public Item getById(Long id) {
         Item item = itemMapper.selectById(id);
         if (item == null) {
@@ -63,6 +72,11 @@ public class ItemServiceImpl implements ItemService {
     }
 
     @Override
+    @Caching(evict = {
+        @CacheEvict(value = "itemPage", allEntries = true),     // 清所有分页（数据变了）
+        @CacheEvict(value = "itemDetail", key = "#itemId"),   // 清这一条详情
+        @CacheEvict(value = "itemMypage", allEntries = true)     // 清所有我的发布"
+    })
     public void updateStatus(Long itemId, Long userId, String status) {
         // 乐观锁 + 重试：最多重试 3 次，防止并发认领冲突
         int maxRetries = 3;
@@ -94,6 +108,7 @@ public class ItemServiceImpl implements ItemService {
     }
 
     @Override
+    @Cacheable(value = "itemMypage",key = "#userId +':'+ #query.page + ':' + #query.size + ':' + #query.type + ':' + #query.category + ':' + #query.keyword + ':' + #query.status + ':' + #query.upordown")
     public Page<Item> pageByUserId(Long userId, ItemPageQuery query) {
         LambdaQueryWrapper<Item> wrapper = buildQueryWrapper(query);
         // 在公共筛选基础上，限定当前用户

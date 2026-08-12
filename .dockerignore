@@ -1,0 +1,24 @@
+# Maven 编译产物（会在容器里重新编译）
+target/
+
+# IDE 配置
+.idea/
+*.iml
+
+# Git
+.git/
+.gitignore
+
+# 文档
+docs/
+*.md
+!CLAUDE.md
+
+# 环境变量文件
+.env
+.env.local
+
+# Docker 自身
+Dockerfile
+docker-compose.yml
+.dockerignore
