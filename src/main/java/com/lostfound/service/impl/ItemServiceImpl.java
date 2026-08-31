@@ -64,11 +64,8 @@ public class ItemServiceImpl implements ItemService {
     @Override
     @Cacheable(value = "itemDetail", key = "#id")
     public Item getById(Long id) {
-        Item item = itemMapper.selectById(id);
-        if (item == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "物品不存在");
-        }
-        return item;
+        // 查不到就返回 null，让 Spring 把 null 也缓存起来（防缓存穿透）
+        return itemMapper.selectById(id);
     }
 
     @Override

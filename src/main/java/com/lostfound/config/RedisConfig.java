@@ -35,9 +35,8 @@ public class RedisConfig {
                 // 用 JSON 序列化值（看得懂、好调试）
                 .serializeValuesWith(
                         RedisSerializationContext.SerializationPair.fromSerializer(
-                                new GenericJackson2JsonRedisSerializer()))
-                // 禁用缓存 null 值（防穿透）
-                .disableCachingNullValues();
+                                new GenericJackson2JsonRedisSerializer()));
+        // 注：不再禁用 null 值缓存 —— 让 null 也被缓存（防缓存穿透）
 
         return RedisCacheManager.builder(factory)
                 .cacheDefaults(defaultConfig)

@@ -1,7 +1,9 @@
 package com.lostfound.controller;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.lostfound.common.BusinessException;
 import com.lostfound.common.Result;
+import com.lostfound.common.ResultCode;
 import com.lostfound.dto.ItemCreateRequest;
 import com.lostfound.dto.ItemPageQuery;
 import com.lostfound.entity.Item;
@@ -59,6 +61,9 @@ public class ItemController {
     @GetMapping("/{id}")
     public Result<Map<String, Object>> detail(@PathVariable Long id) {
         Item item = itemService.getById(id);
+        if (item == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "物品不存在");
+        }
         String nickname = userService.getNicknameById(item.getUserId());
 
         Map<String, Object> result = new LinkedHashMap<>();
