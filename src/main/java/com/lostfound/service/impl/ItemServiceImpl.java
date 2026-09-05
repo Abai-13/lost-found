@@ -25,6 +25,12 @@ import java.util.List;
 public class ItemServiceImpl implements ItemService {
 
     private final ItemMapper itemMapper;
+    private void limitPageSize (ItemPageQuery query) {
+        // 防止一次查询太多数据,超过50条就默认50条
+        if (query.getSize()>50) {
+            query.setSize(50);
+        }
+    }
 
     @Override
     @Caching(evict = {
@@ -56,6 +62,7 @@ public class ItemServiceImpl implements ItemService {
     @Override
     @Cacheable(value = "itemPage", key = "#query.page + ':' + #query.size + ':' + #query.type + ':' + #query.category + ':' + #query.keyword + ':' + #query.status + ':' + #query.upordown")
     public Page<Item> page(ItemPageQuery query) {
+        limitPageSize (query);
         LambdaQueryWrapper<Item> wrapper = buildQueryWrapper(query);
         return itemMapper.selectPage(
                 new Page<>(query.getPage(), query.getSize()), wrapper);
@@ -107,6 +114,7 @@ public class ItemServiceImpl implements ItemService {
     @Override
     @Cacheable(value = "itemMypage",key = "#userId +':'+ #query.page + ':' + #query.size + ':' + #query.type + ':' + #query.category + ':' + #query.keyword + ':' + #query.status + ':' + #query.upordown")
     public Page<Item> pageByUserId(Long userId, ItemPageQuery query) {
+        limitPageSize (query);
         LambdaQueryWrapper<Item> wrapper = buildQueryWrapper(query);
         // 在公共筛选基础上，限定当前用户
         wrapper.eq(Item::getUserId, userId);

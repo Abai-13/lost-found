@@ -1,6 +1,8 @@
 package com.lostfound.config;
 
+import org.springframework.cache.annotation.CachingConfigurer;
 import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.cache.interceptor.CacheErrorHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
@@ -21,7 +23,7 @@ import java.time.Duration;
  */
 @Configuration
 @EnableCaching
-public class RedisConfig {
+public class RedisConfig implements CachingConfigurer {
 
     /**
      * 缓存管理器 — 管理缓存的创建、读写、过期。
@@ -62,5 +64,15 @@ public class RedisConfig {
 
         template.afterPropertiesSet();
         return template;
+    }
+
+    /**
+     * 缓存降级：Redis 不可用时，缓存读写失败不再抛异常，而是记录日志后静默降级。
+     * - 读失败 → 当作缓存未命中，直接查数据库
+     * - 写/删失败 → 忽略，数据以数据库为准
+     */
+    @Override
+    public CacheErrorHandler errorHandler() {
+        return new GracefulCacheErrorHandler();
     }
 }

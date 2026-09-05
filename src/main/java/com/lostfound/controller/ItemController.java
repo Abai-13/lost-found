@@ -96,6 +96,7 @@ public class ItemController {
                                      HttpServletRequest httpRequest) {
         Long userId = (Long) httpRequest.getAttribute("userId");
         itemService.updateStatus(id, userId, status);
-        return Result.ok("更新成功");
+        // 显式传两个参数，避免走 ok(T data) 重载把"更新成功"误当成 data
+        return Result.ok("更新成功", null);
     }
 }

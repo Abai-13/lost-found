@@ -13,23 +13,7 @@ spring:
       max-file-size: 10MB
       max-request-size: 10MB
 
-# MyBatis-Plus
-mybatis-plus:
-  configuration:
-    map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
-  global-config:
-    db-config:
-      id-type: auto
-  mapper-locations: classpath:mapper/*.xml
-
-# JWT 配置
-jwt:
-  secret: YourSecretKeyForLostFoundProject2024@#$%^&*MakeItLongEnough
-  expire-days: 7
-
-# Redis 缓存
-spring:
+  # Redis 缓存
   data:
     redis:
       host: localhost
@@ -45,6 +29,21 @@ spring:
     type: redis
     redis:
       time-to-live: 300000    # 默认缓存 5 分钟（毫秒）
+
+# MyBatis-Plus
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+  mapper-locations: classpath:mapper/*.xml
+
+# JWT 配置
+jwt:
+  secret: YourSecretKeyForLostFoundProject2024@#$%^&*MakeItLongEnough
+  expire-days: 7
 
 # 日志
 logging:
