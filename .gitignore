@@ -12,3 +12,6 @@ Thumbs.db
 # Environment (keep API keys out)
 *.env
 .env.local
+
+# Local learning journal — 学习进度/练习记录，不随仓库发布
+docs/learning-log.md

@@ -145,7 +145,7 @@ src/main/java/com/lostfound/
 - **为什么统一返回体？** 前端只需判断 code === 200，异常不靠 HTTP 500 返回，由全局异常处理器统一拦截转换
 - **为什么 API Key 放环境变量？** 防止密钥泄露到 Git 仓库，生产环境可平滑迁移到配置中心
 
-更多面试相关的内容见 [CLAUDE.md](./CLAUDE.md) 和 [面试问答文档](./docs/interview-qa.md)。
+更完整的模块设计与取舍记录见 [docs/technical-notes.md](./docs/technical-notes.md)。
 
 ## 开发日志
 
@@ -153,8 +153,8 @@ src/main/java/com/lostfound/
 |------|------|
 | 08-04 | 项目骨架 + JWT 认证 + 用户注册/登录 + CRUD 接口 |
 | 08-05 | 分页查询 + 条件筛选 + 排序 + 权限两层防护 |
-| 08-06 | 面试复习 + 排序功能改造 + 面试手册 |
+| 08-06 | 排序功能改造 + 设计决策记录 |
 | 08-07 | Git & GitHub 推送 + 简历制作 |
 | 08-08 | DeepSeek API 接入 + 限流拦截器 + 降级处理 |
-| 08-09 | AI 物品匹配 + 模拟面试 |
+| 08-09 | AI 物品匹配 |
 | 08-10 | 图片上传（MultipartFile + UUID + 白名单校验） |
