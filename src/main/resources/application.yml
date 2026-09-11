@@ -2,11 +2,16 @@ server:
   port: 8080
 
 spring:
+  # 本地开发凭据放在 application-local.yml（已 gitignore，不进仓库）
+  # 该文件不存在时回落到下面的默认值，克隆仓库的人改成自己的即可
+  config:
+    import: optional:classpath:application-local.yml
+
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/lost_found?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
-    username: root
-    password: Bcx2242436946
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:root}
 
   servlet:
     multipart:
@@ -42,7 +47,7 @@ mybatis-plus:
 
 # JWT 配置
 jwt:
-  secret: YourSecretKeyForLostFoundProject2024@#$%^&*MakeItLongEnough
+  secret: "${JWT_SECRET:YourSecretKeyForLostFoundProject2024@#$%^&*MakeItLongEnough}"
   expire-days: 7
 
 # 日志

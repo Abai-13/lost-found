@@ -15,3 +15,7 @@ Thumbs.db
 
 # Local learning journal — 学习进度/练习记录，不随仓库发布
 docs/learning-log.md
+
+# Local credentials — 真实数据库密码等，只存本地
+application-local.yml
+src/main/resources/application-local.yml
