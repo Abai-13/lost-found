@@ -1,6 +1,7 @@
 package com.lostfound.controller;
 
 import com.lostfound.common.Result;
+import com.lostfound.dto.AiQueryResponse;
 import com.lostfound.dto.ChatRequest;
 import com.lostfound.service.AiService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,13 +33,16 @@ public class AiController {
         return Result.ok(Map.of("answer", answer));
     }
 
-    /** AI根据用户询问信息查询未认领物品数据 */
+    /**
+     * AI 物品匹配：根据用户的自然语言描述，从候选物品里挑出最像的几条。
+     * <p>
+     * 返回结构化结果（matches 数组），前端可以渲染成可点击的物品卡片。
+     */
     @PostMapping("/query")
-    public Result<Map<String, String>> query(@Valid @RequestBody ChatRequest request,
+    public Result<AiQueryResponse> query(@Valid @RequestBody ChatRequest request,
                                             HttpServletRequest httpRequest) {
         Long userId = (Long) httpRequest.getAttribute("userId");
-        log.info("用户 {} 发起 AI 问答: {}", userId, request.getQuestion());
-        String answer = aiService.query(request.getQuestion());
-        return Result.ok(Map.of("answer", answer));
+        log.info("用户 {} 发起 AI 物品匹配: {}", userId, request.getQuestion());
+        return Result.ok(aiService.query(request.getQuestion()));
     }
 }
