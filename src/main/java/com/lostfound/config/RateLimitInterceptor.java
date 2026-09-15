@@ -3,6 +3,7 @@ package com.lostfound.config;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
@@ -13,15 +14,22 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 简单限流拦截器 — 基于内存计数器。
  * <p>
- * 每个用户每分钟最多 5 次请求。
+ * 每个用户每分钟最多 {@code rate-limit.ai.max-requests} 次请求（默认 5 次）。
  * 如果未来需要分布式部署，可将 ConcurrentHashMap 替换为 Redis incr + expire。
  */
 @Slf4j
 @Component
 public class RateLimitInterceptor implements HandlerInterceptor {
 
-    /** 每个用户每分钟最大请求数 */
-    private static final int MAX_REQUESTS_PER_MINUTE = 5;
+    /**
+     * 每个用户每分钟最大请求数。
+     * <p>
+     * ⚠️ 做成配置项而不是编译期常量：限流阈值是**运维参数**，不同环境要的值不一样 ——
+     * 生产收紧到 5，压测/跑评测要放宽到几百。硬编码意味着每次调整都得改代码重新编译部署。
+     * 校验和缓存 TTL 这些也是同理（application.yml 里的 deepseek 那段就是这么做的）。
+     */
+    @Value("${rate-limit.ai.max-requests:5}")
+    private int maxRequestsPerMinute;
 
     /** 限流窗口（毫秒） */
     private static final long WINDOW_MS = 60_000;
@@ -50,8 +58,9 @@ public class RateLimitInterceptor implements HandlerInterceptor {
             timestamps.removeIf(t -> now - t > WINDOW_MS);
 
             // ② 判断是否超过限制
-            if (timestamps.size() >= MAX_REQUESTS_PER_MINUTE) {
-                log.warn("用户 {} 触发限流，1 分钟内请求 {} 次", userId, timestamps.size());
+            if (timestamps.size() >= maxRequestsPerMinute) {
+                log.warn("用户 {} 触发限流，1 分钟内已请求 {} 次（上限 {}）",
+                        userId, timestamps.size(), maxRequestsPerMinute);
                 response.setContentType("application/json;charset=UTF-8");
                 response.setStatus(429); // Too Many Requests
                 response.getWriter().write(
