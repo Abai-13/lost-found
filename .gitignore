@@ -19,3 +19,7 @@ docs/learning-log.md
 # Local credentials — 真实数据库密码等，只存本地
 application-local.yml
 src/main/resources/application-local.yml
+
+# 评测用的生成数据 —— 可由 eval/gen-items.js 重新生成，不入库
+eval/seed-items.sql
+eval/.gen-stats.txt
