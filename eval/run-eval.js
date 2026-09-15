@@ -174,22 +174,35 @@ async function main() {
       completionTokens: data.completionTokens,
       elapsedMs: data.elapsedMs,
       answer: data.answer,
+      // ⚠️ 后端降级标记。没有它的话，「大模型调用失败」和「匹配了但没找到」
+      // 在外面看完全一样（都是 HTTP 200 + 一段正常文案），
+      // 失败的用例会被当成未命中算进指标 —— 实测因此得出过完全颠倒的结论。
+      degradeReason: data.degradeReason || null,
     };
   });
 
   const wall = ((Date.now() - started) / 1000).toFixed(0);
   writeFileSync(`eval/results-${LABEL}.jsonl`, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 
-  // 请求失败的用例不进指标 —— 它们既不是命中也不是未命中，
-  // 是「这次根本没测成」。混进去会让 Recall 看起来变差，误导判断。
+  // 分三类，绝不能混在一起算：
+  //   llmFailed    后端调大模型失败，返回了降级文案 → 既不是命中也不是未命中，是"没测成"
+  //   noCandidates 召回确实为空，压根没调大模型   → 这是正常的未命中
+  //   errored      连我们的后端都没调通
+  const llmFailed = rows.filter((r) => r.degradeReason === 'LLM_ERROR');
+  const noCandidates = rows.filter((r) => r.degradeReason === 'NO_CANDIDATES');
   const errored = rows.filter((r) => r.error);
-  const ok = rows.filter((r) => !r.error);
-  const errorRate = errored.length / rows.length;
-  if (errored.length) {
-    console.error(`\n⚠️  ${errored.length} 条用例请求失败（已从指标中剔除）`);
+  const ok = rows.filter((r) => !r.error && r.degradeReason !== 'LLM_ERROR');
+
+  if (llmFailed.length) {
+    console.error(`\n⚠️  ${llmFailed.length} 条用例的大模型调用失败（已从指标中剔除）`);
+    console.error(`   降级率 ${((llmFailed.length / rows.length) * 100).toFixed(1)}% —— 这是可用性指标，和命中率同等重要`);
   }
-  if (errorRate > 0.05) {
-    console.error(`🔴 失败率 ${(errorRate * 100).toFixed(1)}% 过高，这份报告不可信，建议重跑`);
+  if (errored.length) {
+    console.error(`   另有 ${errored.length} 条请求我们的后端就失败了`);
+  }
+  const degradeRate = llmFailed.length / rows.length;
+  if (degradeRate > 0.05) {
+    console.error(`🔴 降级率 ${(degradeRate * 100).toFixed(1)}% 过高 —— 说明这家供应商的可用性有问题，报告要谨慎解读`);
   }
 
   const overall = summarize(ok);
@@ -208,7 +221,10 @@ async function main() {
     `- 评测集：\`${DATASET}\`（${dataset.length} 条）`,
     `- 执行时间：${new Date().toISOString().slice(0, 19).replace('T', ' ')} UTC，总耗时 ${wall}s`,
     `- 说明：每个用例只有一个标准答案，所以 Hit@K 等于 Recall@K`,
-    `- 参与统计：${ok.length} 条${errored.length ? `（另有 ${errored.length} 条请求失败已剔除，失败率 ${(errorRate * 100).toFixed(1)}%）` : ''}`,
+    `- 参与统计：${ok.length} 条`,
+    `- **大模型降级率**：${((llmFailed.length / rows.length) * 100).toFixed(1)}%（${llmFailed.length} 条调用失败已剔除）` +
+      (degradeRate > 0.05 ? ' 🔴 过高，供应商可用性存疑' : ''),
+    `- 召回为空（正常路径）：${noCandidates.length} 条`,
     '',
     '## 总览',
     '',

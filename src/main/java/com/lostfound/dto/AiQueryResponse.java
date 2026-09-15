@@ -46,4 +46,22 @@ public class AiQueryResponse {
 
     /** 端到端耗时（毫秒），含查库 + 调大模型 */
     private long elapsedMs;
+
+    /**
+     * 降级原因。正常返回时为 {@code null}。
+     * <p>
+     * <b>为什么必须有这个字段</b>：大模型调用失败时，接口会返回 HTTP 200
+     * 和一句"AI 服务繁忙，请稍后重试"——从外面看和"正常但没匹配到"完全一样。
+     * 评测脚本因此把调用失败当成"未命中"算进了指标，
+     * 导致「优化后的版本看起来更差」这种完全颠倒的结论。
+     * <p>
+     * 这和 P0 那个 Redis bug 是同一类问题：降级保证可用性是对的，
+     * 但把失败伪装成正常结果是错的 —— 失败必须可观测。
+     */
+    private String degradeReason;
+
+    /** 大模型调用失败 */
+    public static final String DEGRADE_LLM_ERROR = "LLM_ERROR";
+    /** 召回为空，压根没调大模型（这是正常路径，不是故障） */
+    public static final String DEGRADE_NO_CANDIDATES = "NO_CANDIDATES";
 }

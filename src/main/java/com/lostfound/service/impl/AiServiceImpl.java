@@ -14,6 +14,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
@@ -44,6 +47,15 @@ public class AiServiceImpl implements AiService {
     @Value("${ai.recall.top-k:50}")
     private int recallTopK;
 
+    /**
+     * 大模型调用失败时的重试次数（不含首次）。
+     * <p>
+     * 实测免费档的长尾延迟导致的降级率在 1.4%~32.2% 之间波动，
+     * 重试一次就能把绝大部分超时救回来。设成 0 可关闭重试。
+     */
+    @Value("${llm.max-retries:2}")
+    private int maxRetries;
+
     /** 系统提示：限制 AI 只回答失物招领相关问题 */
     private static final String SYSTEM_PROMPT =
             "你是校园失物招领助手，只回答校园失物招领、物品挂失、物品寻找相关的问题。" +
@@ -53,8 +65,32 @@ public class AiServiceImpl implements AiService {
     /**
      * 匹配提示词。
      * <p>
+     * 版本演进记录（换小模型时踩的坑，比代码本身值钱）：
+     * <pre>
+     * v1  原版，「用户描述 → 50 行候选 → 指令」结构
+     *     DeepSeek 93.2% / Qwen2.5-7B 76.0%
+     *
+     * v2  为了适配小模型做了四处"优化"：指令前置 + 打分档位 +
+     *     宁缺毋滥 + 结尾重申
+     *     → Qwen 掉到 61.0%，反而更差
+     *
+     * v3  从 v2 的失败里定位到根因，只改一处：明确鼓励"不确定也要返回"
+     * </pre>
+     * <p>
+     * v2 失败的原因值得记下来 —— 它是「prompt 和评测集设计撞车」：
+     * 评测集的 query 是「失主视角的模糊描述」，故意丢掉了精确型号，
+     * 所以<b>正确答案天生就是那条"不太确定"的</b>。
+     * 而我在 v2 里写了「不像的不要硬凑，宁可少返回」——
+     * 模型照做，把正确答案也一起毙了。
+     * 实测证据：返回空结果的用例占比 4.1%(DeepSeek) → 13.0%(v1) → 32.9%(v2)，
+     * 和命中率严格负相关。
+     * <p>
+     * 更深的教训是<b>产品判断</b>：失物招领场景里，漏报的代价远大于误报 ——
+     * 多返回几条用户扫一眼就行，返回空用户就直接放弃了。
+     * 我把一个"搜索"任务当成"分类"任务来设计 prompt 了。
+     * <p>
      * 要求返回 JSON 而不是自然语言，是为了让结果可被程序消费。
-     * 配套用 {@code response_format=json_object} 约束输出格式（已实测该参数 DeepSeek 支持，硅基流动等 OpenAI 兼容接口同样支持）。
+     * 配套用 {@code response_format=json_object} 约束输出格式。
      */
     private static final String MATCH_PROMPT_TEMPLATE = """
             用户描述：%s
@@ -67,7 +103,9 @@ public class AiServiceImpl implements AiService {
             要求：
             - itemId 必须是候选列表中真实存在的 id，不要编造
             - score 是 0 到 100 的整数，越大越像
-            - 没有匹配的物品时 matches 返回空数组
+            - 用户的描述通常很模糊，只要有一点像就返回，交给用户自己判断 ——
+              这是找东西的场景，漏掉比多返回的代价大得多
+            - 确实一条都不像时，matches 返回空数组
             """;
 
     /** 描述字段在 prompt 里的最大长度，超出截断 */
@@ -104,6 +142,9 @@ public class AiServiceImpl implements AiService {
         if (candidates.isEmpty()) {
             result.setAnswer("没有找到相关的招领信息。可以换个说法再试试，"
                     + "或者直接去失物招领处登记一下。");
+            // 这是正常路径（召回确实没捞到东西），不是故障。但也要标出来 ——
+            // 判据是它和"调用了大模型但没匹配到"是两回事，评测时要分开统计。
+            result.setDegradeReason(AiQueryResponse.DEGRADE_NO_CANDIDATES);
             result.setElapsedMs(System.currentTimeMillis() - start);
             return result;
         }
@@ -114,7 +155,12 @@ public class AiServiceImpl implements AiService {
 
         if (call == null) {
             result.setAnswer("AI 服务繁忙，请稍后重试");
+            // ⚠️ 必须显式标记。不标记的话，外面看到的是 HTTP 200 + 一段正常文案，
+            // 和"匹配了但没找到"完全无法区分 —— 评测脚本会把它当未命中算进去，
+            // 得出「优化之后反而更差」这种颠倒的结论（实测踩过）。
+            result.setDegradeReason(AiQueryResponse.DEGRADE_LLM_ERROR);
             result.setElapsedMs(System.currentTimeMillis() - start);
+            log.warn("大模型调用失败，本次请求降级: question={}", question);
             return result;
         }
 
@@ -152,13 +198,22 @@ public class AiServiceImpl implements AiService {
     }
 
     /**
-     * 统一调用大模型，集中处理超时和网络异常。
+     * 统一调用大模型，集中处理超时、网络异常和重试。
      * <p>
      * 具体调哪家由 application.yml 的 llm.* 决定 —— 都是 OpenAI 兼容接口。
+     * <p>
+     * <b>为什么一定要重试</b>：实测硅基流动免费档存在偶发的长尾延迟 ——
+     * 大多数请求 2-3 秒返回，但少数会挂死超过 30 秒的读超时。
+     * 评测 146 条时降级率在 1.4% ~ 32.2% 之间剧烈波动，全是这个原因。
+     * 而超时重试对免费额度来说是零成本的，收益极大。
      *
-     * @return 调用结果；失败返回 {@code null}，由调用方决定怎么降级
+     * @return 调用结果；重试后仍失败返回 {@code null}，由调用方决定怎么降级
      */
     private ApiCall callLlm(JSONObject body) {
+        return callLlm(body, 0);
+    }
+
+    private ApiCall callLlm(JSONObject body, int attempt) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setBearerAuth(llmConfig.getApiKey());
@@ -189,11 +244,50 @@ public class AiServiceImpl implements AiService {
 
         } catch (RestClientException e) {
             // 连接超时、读取超时、网络异常统一在这里处理
-            log.error("调用大模型 API 失败", e);
+            if (attempt < maxRetries && isRetryable(e)) {
+                long waitMs = 500L * (1L << attempt) + (long) (Math.random() * 200);
+                log.warn("大模型调用失败（第 {} 次尝试），{}ms 后重试: {}",
+                        attempt + 1, waitMs, e.getMessage());
+                sleepQuietly(waitMs);
+                return callLlm(body, attempt + 1);
+            }
+            log.error("调用大模型 API 失败（共尝试 {} 次）", attempt + 1, e);
             return null;
         } catch (Exception e) {
+            // 解析失败属于"调用成功了但返回体不对"，重试大概率还是同样的结果
             log.error("解析大模型返回内容失败", e);
             return null;
+        }
+    }
+
+    /**
+     * 判断这个异常值不值得重试。
+     * <p>
+     * <b>重试不是越多越好</b>：可恢复的错误（超时、5xx、429 限流）重试有意义；
+     * 不可恢复的错误（401 密钥错、400 参数错、403 无权限）重试一万次也还是错，
+     * 只会白白浪费时间和额度，还会把真正的配置问题掩盖成"服务不稳定"。
+     */
+    private static boolean isRetryable(Exception e) {
+        // 连接/读取超时、连接被重置 —— 免费档最常见的失败模式
+        if (e instanceof ResourceAccessException) {
+            return true;
+        }
+        // 5xx 服务端问题，通常是临时的
+        if (e instanceof HttpServerErrorException) {
+            return true;
+        }
+        // 4xx 里只有 429 值得重试
+        if (e instanceof HttpClientErrorException clientError) {
+            return clientError.getStatusCode().value() == 429;
+        }
+        return false;
+    }
+
+    private static void sleepQuietly(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
         }
     }
 
