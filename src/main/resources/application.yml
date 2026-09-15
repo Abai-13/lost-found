@@ -86,6 +86,27 @@ llm:
   # 只重试可恢复的错误（超时/5xx/429），401/400 这类配置错误不重试。
   max-retries: ${LLM_MAX_RETRIES:2}
 
+# 向量化配置 —— 语义召回用（P3）
+#
+# 独立于上面的 llm 段：可能不是同一家供应商，超时特征也完全不同
+# （对话要 30 秒读超时，向量接口实测 200~300ms 就回来了）。
+embedding:
+  # cloud = 调云端 API；local = 本地 ONNX 模型（P5，尚未实现）
+  provider: ${EMBEDDING_PROVIDER:cloud}
+  api-url: ${EMBEDDING_API_URL:https://api.siliconflow.cn/v1/embeddings}
+  api-key: ${EMBEDDING_API_KEY:${SILICONFLOW_API_KEY:}}
+  # bge-m3：免费档、1024 维、中文效果好。改模型必须同步改下面的 dimension，
+  # 否则启动后所有向量化都会因为维度校验失败而返回 null（日志里有明确报错）。
+  model: ${EMBEDDING_MODEL:BAAI/bge-m3}
+  # 探针实测值，不是查文档抄的：eval/probe-embedding.js
+  dimension: 1024
+  # 探针实测一次 64 条 258ms（约 4ms/条），比单条调用快 55 倍
+  batch-size: 64
+  connect-timeout: 3
+  # 比大模型的 30 秒短：向量是"算一下"不是"生成一段文字"，挂到 10 秒还没响应的多半不会好了
+  read-timeout: 10
+  max-retries: ${EMBEDDING_MAX_RETRIES:2}
+
 # 限流配置
 rate-limit:
   ai:

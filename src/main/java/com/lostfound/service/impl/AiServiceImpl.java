@@ -3,6 +3,7 @@ package com.lostfound.service.impl;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.lostfound.common.RetrySupport;
 import com.lostfound.config.LlmConfig;
 import com.lostfound.dto.AiQueryResponse;
 import com.lostfound.dto.MatchResult;
@@ -14,9 +15,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.HttpServerErrorException;
-import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
@@ -244,11 +242,11 @@ public class AiServiceImpl implements AiService {
 
         } catch (RestClientException e) {
             // 连接超时、读取超时、网络异常统一在这里处理
-            if (attempt < maxRetries && isRetryable(e)) {
-                long waitMs = 500L * (1L << attempt) + (long) (Math.random() * 200);
+            if (attempt < maxRetries && RetrySupport.isRetryable(e)) {
+                long waitMs = RetrySupport.backoffMs(attempt);
                 log.warn("大模型调用失败（第 {} 次尝试），{}ms 后重试: {}",
                         attempt + 1, waitMs, e.getMessage());
-                sleepQuietly(waitMs);
+                RetrySupport.sleepQuietly(waitMs);
                 return callLlm(body, attempt + 1);
             }
             log.error("调用大模型 API 失败（共尝试 {} 次）", attempt + 1, e);
@@ -261,35 +259,10 @@ public class AiServiceImpl implements AiService {
     }
 
     /**
-     * 判断这个异常值不值得重试。
-     * <p>
-     * <b>重试不是越多越好</b>：可恢复的错误（超时、5xx、429 限流）重试有意义；
-     * 不可恢复的错误（401 密钥错、400 参数错、403 无权限）重试一万次也还是错，
-     * 只会白白浪费时间和额度，还会把真正的配置问题掩盖成"服务不稳定"。
+     * 重试判断已抽到 {@link com.lostfound.common.RetrySupport} ——
+     * 接向量接口（P3）时要用一模一样的规则，与其复制一份让两边各自演进，
+     * 不如让它只有一个出处。
      */
-    private static boolean isRetryable(Exception e) {
-        // 连接/读取超时、连接被重置 —— 免费档最常见的失败模式
-        if (e instanceof ResourceAccessException) {
-            return true;
-        }
-        // 5xx 服务端问题，通常是临时的
-        if (e instanceof HttpServerErrorException) {
-            return true;
-        }
-        // 4xx 里只有 429 值得重试
-        if (e instanceof HttpClientErrorException clientError) {
-            return clientError.getStatusCode().value() == 429;
-        }
-        return false;
-    }
-
-    private static void sleepQuietly(long ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-        }
-    }
 
     /**
      * 把大模型返回的 matches 数组转成 {@link MatchResult}。
