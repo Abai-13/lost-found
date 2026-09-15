@@ -55,11 +55,28 @@ logging:
   level:
     com.lostfound: debug
 
-# DeepSeek AI 配置
-deepseek:
-  api-url: https://api.deepseek.com/v1/chat/completions
-  api-key: ${DEEPSEEK_API_KEY:}
-  model: deepseek-chat
+# 大模型配置 —— 都是 OpenAI 兼容接口，换供应商只改下面三项，代码不动
+llm:
+  # 切供应商的方式（启动后端前设环境变量）：
+  #   DeepSeek（当前）  无需设置，用默认值
+  #   硅基流动（免费）   LLM_API_URL=https://api.siliconflow.cn/v1/chat/completions
+  #                     LLM_MODEL=Qwen/Qwen2.5-7B-Instruct
+  #                     LLM_API_KEY=sk-xxx
+  api-url: ${LLM_API_URL:https://api.deepseek.com/v1/chat/completions}
+  # 兼容旧的环境变量名，之前只在环境里配了 DEEPSEEK_API_KEY
+  api-key: ${LLM_API_KEY:${DEEPSEEK_API_KEY:}}
+  # ⚠️ 这里刻意用 deepseek-chat（已弃用的别名），而不是官方 /v1/models 返回的 deepseek-flash。
+  #
+  #    踩过的坑：deepseek-chat 这个别名会被映射到 deepseek-v4-flash 的
+  #    **非思考模式**，而直接用 deepseek-flash 会走**思考模式** ——
+  #    模型先"想"再"答"，推理 token 和输出 token 共用 max-tokens 额度。
+  #    实测 max-tokens=500 时，500 个额度全被推理吃掉（reasoning_tokens=500），
+  #    输出为空字符串，整个匹配接口返回空结果；调到 3000 才正常，
+  #    但每次多烧 187~645 个推理 token，耗时从 1.5s 涨到 3.6s。
+  #
+  #    教训：「已弃用」不等于「该立刻换掉」。换之前要验证，
+  #    否则修掉一个警告、引入一个 bug。
+  model: ${LLM_MODEL:deepseek-chat}
   connect-timeout: 3
   read-timeout: 30
   max-tokens: 500

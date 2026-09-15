@@ -86,6 +86,7 @@ async function pool(items, limit, fn) {
             ...items[i],
             error: e.message,
             rank: 0,
+            recallRank: 0,
             matched: 0,
             returnedIds: [],
             promptTokens: 0,
@@ -116,6 +117,8 @@ function summarize(rows) {
     out[`hit${k}`] = hit / n;
   }
   out.mrr = rows.reduce((s, r) => s + (r.rank > 0 ? 1 / r.rank : 0), 0) / n;
+  // 召回层成功率：标准答案有没有进候选列表
+  out.recallRate = rows.filter((r) => r.recallRank > 0).length / n;
   out.avgPromptTokens = rows.reduce((s, r) => s + (r.promptTokens || 0), 0) / n;
   out.totalTokens = rows.reduce((s, r) => s + (r.promptTokens || 0) + (r.completionTokens || 0), 0);
   out.avgMs = rows.reduce((s, r) => s + (r.elapsedMs || 0), 0) / n;
@@ -158,7 +161,12 @@ async function main() {
     const data = await query(token, d.query);
     return {
       ...d,
+      // 精排层：标准答案在最终 matches 里的排名
       rank: rankOf(data, d.groundTruthId),
+      // 召回层：标准答案在候选列表里的排名（0 = 压根没召回到）
+      // 有了这个才能分清失败发生在哪一层 —— 只看 rank 的话，
+      // 「没召回到」和「召回到了但没挑中」长得一模一样，但修法完全不同
+      recallRank: (data.candidateIds || []).indexOf(d.groundTruthId) + 1,
       matched: (data.matches || []).length,
       returnedIds: (data.matches || []).map((m) => m.itemId),
       candidateCount: data.candidateCount,
@@ -188,6 +196,12 @@ async function main() {
   const byStratum = groupBy(ok, 'stratum');
   const byDiff = groupBy(ok, 'difficulty');
 
+  // 失败归因 —— 把未命中的用例拆成两类，这两类要修的地方完全不同
+  const recalled = ok.filter((r) => r.recallRank > 0);
+  const missed = ok.filter((r) => r.rank === 0);
+  const missByRecall = missed.filter((r) => r.recallRank === 0);      // 召回层就没捞到
+  const missByRerank = missed.filter((r) => r.recallRank > 0);        // 捞到了但没挑中
+
   const md = [
     `# AI 物品匹配评测报告 — ${LABEL}`,
     '',
@@ -204,10 +218,23 @@ async function main() {
     `| Hit@3 | ${pct(overall.hit3)} |`,
     `| Hit@5 | ${pct(overall.hit5)} |`,
     `| MRR | ${overall.mrr.toFixed(3)} |`,
+    `| **召回率**（标准答案进了候选列表） | ${pct(overall.recallRate)} |`,
     `| 返回空结果的用例占比 | ${pct(overall.emptyRate)} |`,
     `| 平均 prompt tokens / 次 | ${Math.round(overall.avgPromptTokens)} |`,
     `| 全量总 tokens | ${overall.totalTokens} |`,
     `| 平均耗时 | ${Math.round(overall.avgMs)} ms |`,
+    '',
+    '## 失败归因',
+    '',
+    '只看最终命中率的话，「没召回到」和「召回到了但没挑中」长得一模一样，',
+    '但这两类要修的地方完全不同。拆开看：',
+    '',
+    '| 失败类型 | 数量 | 占全部用例 | 该修哪里 |',
+    '|---|---:|---:|---|',
+    `| 召回层没捞到 | ${missByRecall.length} | ${pct(missByRecall.length / ok.length)} | 改召回（换打分算法 / 扩 Top-K） |`,
+    `| 召回到了但精排没选中 | ${missByRerank.length} | ${pct(missByRerank.length / ok.length)} | 改精排（prompt / 候选表示 / 模型） |`,
+    '',
+    `召回层总体成功率：**${pct(overall.recallRate)}**（${recalled.length}/${ok.length} 条标准答案进了候选列表）`,
     '',
     table('按候选池分层', byStratum),
     '',
@@ -226,8 +253,12 @@ async function main() {
     md.push('（无）');
   } else {
     for (const r of failed) {
+      const reason = r.recallRank === 0
+        ? '❌ 召回层就没捞到'
+        : `⚠️ 召回到了（召回排名第 ${r.recallRank}）但精排没选中`;
       md.push(`- **[${r.stratum}/${r.difficulty}]** 「${r.query}」`);
       md.push(`  - 标准答案：\`#${r.groundTruthId}\` ${r.groundTruthTitle}`);
+      md.push(`  - ${reason}`);
       md.push(`  - 实际返回：${r.returnedIds.length ? r.returnedIds.map((i) => '`#' + i + '`').join(', ') : '空'}`);
     }
   }
@@ -236,7 +267,8 @@ async function main() {
 
   console.log('\n=== 总览 ===');
   console.log(`Hit@1 ${pct(overall.hit1)} | Hit@3 ${pct(overall.hit3)} | Hit@5 ${pct(overall.hit5)} | MRR ${overall.mrr.toFixed(3)}`);
-  console.log(`平均 prompt tokens ${Math.round(overall.avgPromptTokens)} | 总 tokens ${overall.totalTokens} | 平均耗时 ${Math.round(overall.avgMs)}ms`);
+  console.log(`召回率 ${pct(overall.recallRate)} | 平均 prompt tokens ${Math.round(overall.avgPromptTokens)} | 总 tokens ${overall.totalTokens} | 平均耗时 ${Math.round(overall.avgMs)}ms`);
+  console.log(`\n失败归因：召回没捞到 ${missByRecall.length} 条 / 召回到了没挑中 ${missByRerank.length} 条`);
   console.log('\n=== 分层 ===');
   for (const [k, s] of Object.entries(byStratum)) {
     console.log(`${k.padEnd(10)} n=${s.n}  Hit@5 ${pct(s.hit5)}  MRR ${s.mrr.toFixed(3)}`);

@@ -28,6 +28,16 @@ public class AiQueryResponse {
     /** 这次喂给大模型多少条候选 —— 用来诊断召回是不是被候选池卡住了 */
     private int candidateCount;
 
+    /**
+     * 这次实际召回的候选 id 列表（按召回得分从高到低）。
+     * <p>
+     * 用途是**把失败归因到具体的层**。只看最终命中率的话，
+     * 「没召回到」和「召回到了但大模型没挑中」长得一模一样，
+     * 而这两种情况要修的地方完全不同（前者改召回，后者改精排）。
+     * 有了这个字段，评测脚本就能分开算两层的成功率。
+     */
+    private List<Long> candidateIds;
+
     /** 本次消耗的 prompt token。评测要拿它对比优化前后的成本 */
     private int promptTokens;
 

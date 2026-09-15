@@ -3,7 +3,7 @@ package com.lostfound.service.impl;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
-import com.lostfound.config.DeepSeekConfig;
+import com.lostfound.config.LlmConfig;
 import com.lostfound.dto.AiQueryResponse;
 import com.lostfound.dto.MatchResult;
 import com.lostfound.entity.Item;
@@ -24,15 +24,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * AI 服务实现 — 调用 DeepSeek API。
+ * AI 服务实现 — 调用大模型完成问答和物品匹配。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AiServiceImpl implements AiService {
 
-    private final DeepSeekConfig deepSeekConfig;
-    private final RestTemplate deepseekRestTemplate;
+    private final LlmConfig llmConfig;
+    private final RestTemplate llmRestTemplate;
     private final CandidateService candidateService;
 
     /**
@@ -54,7 +54,7 @@ public class AiServiceImpl implements AiService {
      * 匹配提示词。
      * <p>
      * 要求返回 JSON 而不是自然语言，是为了让结果可被程序消费。
-     * 配套用 {@code response_format=json_object} 约束输出格式（已实测该参数 DeepSeek 支持）。
+     * 配套用 {@code response_format=json_object} 约束输出格式（已实测该参数 DeepSeek 支持，硅基流动等 OpenAI 兼容接口同样支持）。
      */
     private static final String MATCH_PROMPT_TEMPLATE = """
             用户描述：%s
@@ -78,7 +78,7 @@ public class AiServiceImpl implements AiService {
     @Override
     public String chat(String question) {
         log.info("AI 问答请求: {}", question);
-        ApiCall call = callDeepSeek(buildChatBody(question));
+        ApiCall call = callLlm(buildChatBody(question));
         if (call == null) {
             return "AI 服务繁忙，请稍后重试";
         }
@@ -95,6 +95,7 @@ public class AiServiceImpl implements AiService {
 
         AiQueryResponse result = new AiQueryResponse();
         result.setCandidateCount(candidates.size());
+        result.setCandidateIds(candidates.stream().map(Item::getId).toList());
         result.setMatches(List.of());
 
         // ② 一个候选都没有时，别调大模型 —— 白花一次 token 和 1 秒延迟。
@@ -109,7 +110,7 @@ public class AiServiceImpl implements AiService {
 
         // ③ 拼 prompt 并调用大模型
         String prompt = String.format(MATCH_PROMPT_TEMPLATE, question, formatCandidates(candidates));
-        ApiCall call = callDeepSeek(buildMatchBody(prompt));
+        ApiCall call = callLlm(buildMatchBody(prompt));
 
         if (call == null) {
             result.setAnswer("AI 服务繁忙，请稍后重试");
@@ -146,27 +147,29 @@ public class AiServiceImpl implements AiService {
     //   改造后：CandidateService.recall()  —— 全量候选 + 2-gram 打分取 Top-K
     // 保留这条注释是因为「为什么换掉」比「换成了什么」更值得记住。
 
-    /** 一次 DeepSeek 调用的结果：正文 + token 用量 */
+    /** 一次大模型调用的结果：正文 + token 用量 */
     private record ApiCall(String content, int promptTokens, int completionTokens) {
     }
 
     /**
-     * 统一调用 DeepSeek，集中处理超时和网络异常。
+     * 统一调用大模型，集中处理超时和网络异常。
+     * <p>
+     * 具体调哪家由 application.yml 的 llm.* 决定 —— 都是 OpenAI 兼容接口。
      *
      * @return 调用结果；失败返回 {@code null}，由调用方决定怎么降级
      */
-    private ApiCall callDeepSeek(JSONObject body) {
+    private ApiCall callLlm(JSONObject body) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(deepSeekConfig.getApiKey());
+        headers.setBearerAuth(llmConfig.getApiKey());
         HttpEntity<String> entity = new HttpEntity<>(body.toString(), headers);
 
         try {
-            ResponseEntity<String> response = deepseekRestTemplate.postForEntity(
-                    deepSeekConfig.getApiUrl(), entity, String.class);
+            ResponseEntity<String> response = llmRestTemplate.postForEntity(
+                    llmConfig.getApiUrl(), entity, String.class);
 
             if (response.getStatusCode() != HttpStatus.OK || response.getBody() == null) {
-                log.error("DeepSeek API 返回异常状态码: {}", response.getStatusCode());
+                log.error("大模型 API 返回异常状态码: {}", response.getStatusCode());
                 return null;
             }
 
@@ -186,10 +189,10 @@ public class AiServiceImpl implements AiService {
 
         } catch (RestClientException e) {
             // 连接超时、读取超时、网络异常统一在这里处理
-            log.error("调用 DeepSeek API 失败", e);
+            log.error("调用大模型 API 失败", e);
             return null;
         } catch (Exception e) {
-            log.error("解析 DeepSeek 返回内容失败", e);
+            log.error("解析大模型返回内容失败", e);
             return null;
         }
     }
@@ -293,27 +296,27 @@ public class AiServiceImpl implements AiService {
     /** 构建问答请求体 */
     private JSONObject buildChatBody(String question) {
         JSONObject body = new JSONObject();
-        body.set("model", deepSeekConfig.getModel());
+        body.set("model", llmConfig.getModel());
         body.set("messages", List.of(
                 Map.of("role", "system", "content", SYSTEM_PROMPT),
                 Map.of("role", "user", "content", question)
         ));
         body.set("temperature", 0.7);
-        body.set("max_tokens", deepSeekConfig.getMaxTokens());
+        body.set("max_tokens", llmConfig.getMaxTokens());
         return body;
     }
 
     /** 构建匹配请求体。temperature=0 是因为匹配要可复现，不能每次给出不同结果 */
     private JSONObject buildMatchBody(String prompt) {
         JSONObject body = new JSONObject();
-        body.set("model", deepSeekConfig.getModel());
+        body.set("model", llmConfig.getModel());
         body.set("messages", List.of(
                 Map.of("role", "system", "content", SYSTEM_PROMPT),
                 Map.of("role", "user", "content", prompt)
         ));
         body.set("temperature", 0);
         body.set("response_format", Map.of("type", "json_object"));
-        body.set("max_tokens", deepSeekConfig.getMaxTokens());
+        body.set("max_tokens", llmConfig.getMaxTokens());
         return body;
     }
 }
