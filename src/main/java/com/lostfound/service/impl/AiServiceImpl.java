@@ -5,13 +5,13 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.lostfound.config.DeepSeekConfig;
 import com.lostfound.dto.AiQueryResponse;
-import com.lostfound.dto.ItemPageQuery;
 import com.lostfound.dto.MatchResult;
 import com.lostfound.entity.Item;
 import com.lostfound.service.AiService;
-import com.lostfound.service.ItemService;
+import com.lostfound.service.CandidateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
@@ -33,7 +33,16 @@ public class AiServiceImpl implements AiService {
 
     private final DeepSeekConfig deepSeekConfig;
     private final RestTemplate deepseekRestTemplate;
-    private final ItemService itemService;
+    private final CandidateService candidateService;
+
+    /**
+     * 召回后送进大模型的候选条数。
+     * <p>
+     * 做成配置项的理由和限流阈值一样：这是运维参数，要按实测调。
+     * 调小了召回不够（池子里的东西进不来），调大了 token 上去、干扰项也变多。
+     */
+    @Value("${ai.recall.top-k:50}")
+    private int recallTopK;
 
     /** 系统提示：限制 AI 只回答失物招领相关问题 */
     private static final String SYSTEM_PROMPT =
@@ -50,7 +59,6 @@ public class AiServiceImpl implements AiService {
     private static final String MATCH_PROMPT_TEMPLATE = """
             用户描述：%s
 
-            候选物品列表：
             %s
 
             请从候选物品中挑出与用户描述最匹配的物品，最多 5 个，按匹配度从高到低排序。
@@ -61,6 +69,9 @@ public class AiServiceImpl implements AiService {
             - score 是 0 到 100 的整数，越大越像
             - 没有匹配的物品时 matches 返回空数组
             """;
+
+    /** 描述字段在 prompt 里的最大长度，超出截断 */
+    private static final int DESC_MAX_LEN = 60;
 
     // ===================== 对外接口 =====================
 
@@ -79,15 +90,25 @@ public class AiServiceImpl implements AiService {
         long start = System.currentTimeMillis();
         log.info("AI 物品匹配请求: {}", question);
 
-        // ① 取候选物品（⚠️ 这里还是改造前的逻辑，见 getCandidates 的注释）
-        List<Item> candidates = getCandidates();
+        // ① 召回候选物品 —— 从「最近发布的 30 条」改成「全量 + 2-gram 打分取 Top-K」
+        List<Item> candidates = candidateService.recall(question, recallTopK);
 
         AiQueryResponse result = new AiQueryResponse();
         result.setCandidateCount(candidates.size());
         result.setMatches(List.of());
 
-        // ② 拼 prompt 并调用大模型
-        String prompt = String.format(MATCH_PROMPT_TEMPLATE, question, candidates.toString());
+        // ② 一个候选都没有时，别调大模型 —— 白花一次 token 和 1 秒延迟。
+        //    模型面对空列表只有两种反应：说「没找到」，或者开始编。
+        //    这两种结果我们本来就知道，没必要花钱问一次。
+        if (candidates.isEmpty()) {
+            result.setAnswer("没有找到相关的招领信息。可以换个说法再试试，"
+                    + "或者直接去失物招领处登记一下。");
+            result.setElapsedMs(System.currentTimeMillis() - start);
+            return result;
+        }
+
+        // ③ 拼 prompt 并调用大模型
+        String prompt = String.format(MATCH_PROMPT_TEMPLATE, question, formatCandidates(candidates));
         ApiCall call = callDeepSeek(buildMatchBody(prompt));
 
         if (call == null) {
@@ -99,7 +120,7 @@ public class AiServiceImpl implements AiService {
         result.setPromptTokens(call.promptTokens());
         result.setCompletionTokens(call.completionTokens());
 
-        // ③ 解析 JSON 并回填本地字段
+        // ④ 解析 JSON 并回填本地字段
         try {
             JSONObject json = JSONUtil.parseObj(call.content());
             result.setAnswer(json.getStr("answer", ""));
@@ -118,30 +139,12 @@ public class AiServiceImpl implements AiService {
         return result;
     }
 
-    // ===================== 候选物品 =====================
-
-    /**
-     * 取候选物品 —— 按创建时间倒序取最近 30 条未认领的招领物品。
-     * <p>
-     * ⚠️ 这正是本次迭代要改掉的地方，现在原样保留，作为评测基线：
-     * <ul>
-     *   <li>取的是「最近发布的 30 条」，不是「最像的 30 条」——
-     *       两周前发布的东西压根进不了候选池，永远匹配不到</li>
-     *   <li>候选数硬编码 30，物品多了之后召回被卡死（库里现在有 1001 条未认领招领物品，
-     *       这个池子只覆盖 3%）</li>
-     * </ul>
-     */
-    public List<Item> getCandidates() {
-        ItemPageQuery query = new ItemPageQuery();
-        query.setUpordown("DESC");
-        query.setPage(1);
-        query.setSize(30);
-        query.setType("FOUND");
-        query.setStatus("UNCLAIMED");
-        return itemService.page(query).getRecords();
-    }
-
     // ===================== 私有方法 =====================
+    //
+    // 候选物品的取法已移交 CandidateService:
+    //   改造前：itemService.page(最近 30 条) —— 取的是「最近」不是「最像」，池外命中率 0%
+    //   改造后：CandidateService.recall()  —— 全量候选 + 2-gram 打分取 Top-K
+    // 保留这条注释是因为「为什么换掉」比「换成了什么」更值得记住。
 
     /** 一次 DeepSeek 调用的结果：正文 + token 用量 */
     private record ApiCall(String content, int promptTokens, int completionTokens) {
@@ -236,6 +239,55 @@ public class AiServiceImpl implements AiService {
 
         list.sort(Comparator.comparingInt(MatchResult::getScore).reversed());
         return list;
+    }
+
+    /**
+     * 把候选物品格式化成给大模型看的紧凑文本。
+     * <p>
+     * 改造前直接用的是 {@code List<Item>.toString()}（Lombok 的 @Data 生成的），
+     * 输出长这样：
+     * <pre>
+     * Item(id=1000, userId=2, title=黑色iPhone 15, type=FOUND, category=电子产品,
+     *      location=图书馆三楼, description=..., imageUrl=null, contact=null,
+     *      status=UNCLAIMED, version=0, createdAt=2026-09-15T01:44:48,
+     *      updatedAt=2026-09-15T01:44:48)
+     * </pre>
+     * <p>
+     * 问题有两个：
+     * <ol>
+     *   <li><b>大部分字段是噪音</b>。模型要判断「这像不像我丢的东西」，只需要
+     *       标题 / 类别 / 地点 / 描述。userId、version、imageUrl、contact、status、
+     *       type、createdAt 它一个都用不上，却占了 70% 以上的 token</li>
+     *   <li><b>字段名本身也在烧钱</b>。{@code imageUrl=null} 这种不但没信息，
+     *       还占 5 个 token，30 条就是 150 个</li>
+     * </ol>
+     * <p>
+     * 换成一行一条的管道分隔格式，格式说明只在开头写一次，
+     * 不用每条都重复字段名。
+     * <p>
+     * 注意：这一步<b>只改表示，不改候选取哪些</b>，所以命中率不该变化，
+     * 收益体现在 token 成本上。两个改动分开做，才能分别量化各自的效果。
+     */
+    private String formatCandidates(List<Item> candidates) {
+        StringBuilder sb = new StringBuilder("候选物品（格式：id|标题|类别|地点|描述）：\n");
+        for (Item item : candidates) {
+            sb.append(item.getId()).append('|')
+                    .append(nvl(item.getTitle())).append('|')
+                    .append(nvl(item.getCategory())).append('|')
+                    .append(nvl(item.getLocation())).append('|')
+                    .append(truncate(nvl(item.getDescription()), DESC_MAX_LEN))
+                    .append('\n');
+        }
+        return sb.toString();
+    }
+
+    private static String nvl(String s) {
+        return s == null ? "" : s;
+    }
+
+    /** 防止某条描述特别长把 prompt 撑爆 */
+    private static String truncate(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max) + "…";
     }
 
     /** 构建问答请求体 */

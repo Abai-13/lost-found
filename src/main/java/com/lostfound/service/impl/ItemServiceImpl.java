@@ -35,7 +35,8 @@ public class ItemServiceImpl implements ItemService {
     @Override
     @Caching(evict = {
             @CacheEvict(value = "itemPage", allEntries = true),// 新物品发布，清空所有分页缓存
-            @CacheEvict(value = "itemMypage", allEntries = true)// 新物品发布，清空所有我的发布缓存)
+            @CacheEvict(value = "itemMypage", allEntries = true),// 新物品发布，清空所有我的发布缓存)
+            @CacheEvict(value = "foundPool", allEntries = true)// 候选全集变了，AI 召回必须能看到新物品
     })
     public Item publish(Long userId, ItemCreateRequest request, String imageUrl) {
         // 校验 type 取值
@@ -79,7 +80,8 @@ public class ItemServiceImpl implements ItemService {
     @Caching(evict = {
         @CacheEvict(value = "itemPage", allEntries = true),     // 清所有分页（数据变了）
         @CacheEvict(value = "itemDetail", key = "#itemId"),   // 清这一条详情
-        @CacheEvict(value = "itemMypage", allEntries = true)     // 清所有我的发布"
+        @CacheEvict(value = "itemMypage", allEntries = true),    // 清所有我的发布"
+        @CacheEvict(value = "foundPool", allEntries = true)      // 认领后要移出候选全集
     })
     public void updateStatus(Long itemId, Long userId, String status) {
         // 乐观锁 + 重试：最多重试 3 次，防止并发认领冲突
@@ -125,6 +127,25 @@ public class ItemServiceImpl implements ItemService {
     @Override
     public List<Item> selectList(ItemPageQuery query) {
         LambdaQueryWrapper<Item> wrapper = buildQueryWrapper(query);
+        return itemMapper.selectList(wrapper);
+    }
+
+    /**
+     * 全量未认领招领物品 —— 召回用的候选全集。
+     * <p>
+     * 加缓存的原因：召回每次请求都要扫一遍这个集合来打分，
+     * 而集合本身变化很少（只有发布新物品或有人认领时才变）。
+     * 不缓存的话每个 AI 请求都要把上千行捞出来，纯浪费。
+     * <p>
+     * 新鲜度靠 publish / updateStatus 上的 @CacheEvict("foundPool") 保证 ——
+     * 缓存和失效必须成对写，只写一边就会出现「发布了新物品但召回永远看不到它」。
+     */
+    @Override
+    @Cacheable(value = "foundPool", key = "'all'")
+    public List<Item> listUnclaimedFound() {
+        LambdaQueryWrapper<Item> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Item::getType, "FOUND")
+                .eq(Item::getStatus, "UNCLAIMED");
         return itemMapper.selectList(wrapper);
     }
 

@@ -71,3 +71,11 @@ rate-limit:
     # 生产 5 次/分钟够用；跑评测或压测时要调高，否则批量请求会被自己的限流挡回去。
     # 调高方式：启动后端前设置环境变量 RATE_LIMIT_AI_MAX_REQUESTS=1000
     max-requests: ${RATE_LIMIT_AI_MAX_REQUESTS:5}
+
+# AI 匹配配置
+ai:
+  recall:
+    # 召回后送进大模型的候选条数。
+    # 调小了召回不够（候选池里的物品进不来），调大了 token 上去、干扰项也变多。
+    # 改这个值必须重跑评测 —— 它直接决定命中率和成本。
+    top-k: ${AI_RECALL_TOP_K:50}

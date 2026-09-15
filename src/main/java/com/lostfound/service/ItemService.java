@@ -26,4 +26,13 @@ public interface ItemService {
 
     /** 查询所有未被认领的物品信息 */
     List<Item> selectList(ItemPageQuery query);
+
+    /**
+     * 查询全部未认领的招领物品 —— 召回的候选全集。
+     * <p>
+     * 和 {@link #page} 的区别：那个是给页面分页用的（限制 50 条、按时间倒序），
+     * 这个方法要的是完整集合，用来在应用层做相关性打分。
+     * 结果带缓存，靠发布/改状态时的 CacheEvict 保证新鲜度。
+     */
+    List<Item> listUnclaimedFound();
 }
