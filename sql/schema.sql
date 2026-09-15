@@ -32,5 +32,7 @@ CREATE TABLE IF NOT EXISTS `item` (
     PRIMARY KEY (`id`),
     KEY `idx_user_id` (`user_id`),
     KEY `idx_type` (`type`),
-    KEY `idx_status` (`status`)
+    KEY `idx_category` (`category`),
+    KEY `idx_status` (`status`),
+    KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='物品表';
