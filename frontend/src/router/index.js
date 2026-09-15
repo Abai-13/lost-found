@@ -9,6 +9,7 @@ const routes = [
   { path: '/items/:id', component: () => import('../views/ItemDetail.vue') },
   { path: '/publish', component: () => import('../views/Publish.vue') },
   { path: '/ai', component: () => import('../views/AiChat.vue') },
+  { path: '/profile', component: () => import('../views/Profile.vue') },
 ]
 
 const router = createRouter({
@@ -18,7 +19,7 @@ const router = createRouter({
 
 // 路由守卫：访问需要登录的页面时，先检查有没有 token
 router.beforeEach((to) => {
-  const needLogin = ['/publish', '/ai'].includes(to.path)
+  const needLogin = ['/publish', '/ai', '/profile'].includes(to.path)
   if (needLogin && !localStorage.getItem('token')) {
     return '/login'
   }
