@@ -1,0 +1,247 @@
+/**
+ * AI 物品匹配评测执行器。
+ *
+ * 用法：node eval/run-eval.js <标签>
+ *   标签用来区分不同阶段的报告，比如 baseline / after-p2 / after-p4。
+ *   同一个评测集 + 同一个标签规则，跑出来的数字才能横向比。
+ *
+ * 指标：
+ *   Hit@K  —— 标准答案有没有出现在返回的前 K 条里（每个用例只有一个标准答案，所以等同 Recall@K）
+ *   MRR    —— 标准答案排名的倒数均值。只命中但排第 5，和排第 1，差别很大，Hit@K 看不出来
+ *
+ * 为什么必须分层看：
+ *   池外用例的失败**不是匹配算法的问题**，是候选池根本没覆盖到。
+ *   混在一起算平均，会把「召回问题」和「排序问题」搅成一团，看不出该优化哪边。
+ */
+
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const API = 'http://localhost:8080';
+const LABEL = process.argv[2] || 'baseline';
+const DATASET = 'eval/dataset.jsonl';
+const KS = [1, 3, 5];
+
+async function login() {
+  const res = await fetch(`${API}/api/user/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'evalbot', password: 'eval123456' }),
+  });
+  const json = await res.json();
+  if (!json.data?.token) throw new Error('登录失败: ' + JSON.stringify(json));
+  return json.data.token;
+}
+
+/**
+ * 调一次匹配接口。
+ *
+ * ⚠️ 必须带重试。批量打真实外部 API 一定会撞限流（实测并发 4 就开始吃 429），
+ * 不重试的话失败的用例会被当成「没命中」算进 Recall —— 指标静默变差，
+ * 而你会以为是算法不行。这和「降级吞掉异常」是同一类问题：
+ * 失败必须被显式处理，不能让它混进正常结果里。
+ */
+async function query(token, question, attempt = 0) {
+  const res = await fetch(`${API}/api/ai/query`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ question }),
+  });
+
+  // 429 限流 / 5xx 服务端抖动 → 指数退避重试
+  if (res.status === 429 || res.status >= 500) {
+    if (attempt >= 5) {
+      throw new Error(`HTTP ${res.status}（退避重试 5 次仍失败）`);
+    }
+    const waitMs = 1000 * 2 ** attempt + Math.floor(Math.random() * 400);
+    await new Promise((r) => setTimeout(r, waitMs));
+    return query(token, question, attempt + 1);
+  }
+
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  if (json.code !== 200) throw new Error(`code ${json.code}: ${json.message}`);
+  return json.data;
+}
+
+async function pool(items, limit, fn) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  let done = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (true) {
+        const i = cursor++;
+        if (i >= items.length) return;
+        try {
+          results[i] = await fn(items[i], i);
+        } catch (e) {
+          console.error(`  [${i}] 失败: ${e.message}`);
+          // 标记成 error 而不是 rank=0 —— 这两者必须分开：
+          // rank=0 是「算法没找到」，error 是「这次请求压根没成功」。
+          // 混在一起算，限流会让 Recall 凭空掉一截，而且看不出来原因。
+          results[i] = {
+            ...items[i],
+            error: e.message,
+            rank: 0,
+            matched: 0,
+            returnedIds: [],
+            promptTokens: 0,
+            completionTokens: 0,
+            elapsedMs: 0,
+          };
+        }
+        if (++done % 25 === 0) console.error(`  进度 ${done}/${items.length}`);
+      }
+    })
+  );
+  return results;
+}
+
+/** 算标准答案在返回列表里的排名，1 开始；没命中返回 0 */
+function rankOf(data, groundTruthId) {
+  const matches = data.matches || [];
+  const idx = matches.findIndex((m) => m.itemId === groundTruthId);
+  return idx < 0 ? 0 : idx + 1;
+}
+
+function summarize(rows) {
+  const n = rows.length;
+  if (!n) return { n: 0 };
+  const out = { n };
+  for (const k of KS) {
+    const hit = rows.filter((r) => r.rank > 0 && r.rank <= k).length;
+    out[`hit${k}`] = hit / n;
+  }
+  out.mrr = rows.reduce((s, r) => s + (r.rank > 0 ? 1 / r.rank : 0), 0) / n;
+  out.avgPromptTokens = rows.reduce((s, r) => s + (r.promptTokens || 0), 0) / n;
+  out.totalTokens = rows.reduce((s, r) => s + (r.promptTokens || 0) + (r.completionTokens || 0), 0);
+  out.avgMs = rows.reduce((s, r) => s + (r.elapsedMs || 0), 0) / n;
+  out.emptyRate = rows.filter((r) => r.matched === 0).length / n;
+  return out;
+}
+
+const pct = (v) => (v === undefined ? '-' : (v * 100).toFixed(1) + '%');
+
+function table(title, groups) {
+  const lines = [`### ${title}`, '', '| 分组 | 用例数 | Hit@1 | Hit@3 | Hit@5 | MRR | 平均 prompt tokens |', '|---|---:|---:|---:|---:|---:|---:|'];
+  for (const [name, s] of Object.entries(groups)) {
+    if (!s.n) continue;
+    lines.push(`| ${name} | ${s.n} | ${pct(s.hit1)} | ${pct(s.hit3)} | ${pct(s.hit5)} | ${s.mrr.toFixed(3)} | ${Math.round(s.avgPromptTokens)} |`);
+  }
+  return lines.join('\n');
+}
+
+function groupBy(rows, key) {
+  const g = {};
+  for (const r of rows) {
+    (g[r[key]] ||= []).push(r);
+  }
+  return Object.fromEntries(Object.entries(g).map(([k, v]) => [k, summarize(v)]));
+}
+
+async function main() {
+  const dataset = readFileSync(DATASET, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  console.log(`评测集 ${dataset.length} 条，标签 = ${LABEL}`);
+
+  const token = await login();
+  const started = Date.now();
+
+  // 并发压到 2：实测并发 4 会持续吃 429。
+  // 评测不是压测，跑慢一点没关系，结果可信更重要。
+  const rows = await pool(dataset, 2, async (d) => {
+    const data = await query(token, d.query);
+    return {
+      ...d,
+      rank: rankOf(data, d.groundTruthId),
+      matched: (data.matches || []).length,
+      returnedIds: (data.matches || []).map((m) => m.itemId),
+      candidateCount: data.candidateCount,
+      promptTokens: data.promptTokens,
+      completionTokens: data.completionTokens,
+      elapsedMs: data.elapsedMs,
+      answer: data.answer,
+    };
+  });
+
+  const wall = ((Date.now() - started) / 1000).toFixed(0);
+  writeFileSync(`eval/results-${LABEL}.jsonl`, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+
+  // 请求失败的用例不进指标 —— 它们既不是命中也不是未命中，
+  // 是「这次根本没测成」。混进去会让 Recall 看起来变差，误导判断。
+  const errored = rows.filter((r) => r.error);
+  const ok = rows.filter((r) => !r.error);
+  const errorRate = errored.length / rows.length;
+  if (errored.length) {
+    console.error(`\n⚠️  ${errored.length} 条用例请求失败（已从指标中剔除）`);
+  }
+  if (errorRate > 0.05) {
+    console.error(`🔴 失败率 ${(errorRate * 100).toFixed(1)}% 过高，这份报告不可信，建议重跑`);
+  }
+
+  const overall = summarize(ok);
+  const byStratum = groupBy(ok, 'stratum');
+  const byDiff = groupBy(ok, 'difficulty');
+
+  const md = [
+    `# AI 物品匹配评测报告 — ${LABEL}`,
+    '',
+    `- 评测集：\`${DATASET}\`（${dataset.length} 条）`,
+    `- 执行时间：${new Date().toISOString().slice(0, 19).replace('T', ' ')} UTC，总耗时 ${wall}s`,
+    `- 说明：每个用例只有一个标准答案，所以 Hit@K 等于 Recall@K`,
+    `- 参与统计：${ok.length} 条${errored.length ? `（另有 ${errored.length} 条请求失败已剔除，失败率 ${(errorRate * 100).toFixed(1)}%）` : ''}`,
+    '',
+    '## 总览',
+    '',
+    '| 指标 | 值 |',
+    '|---|---:|',
+    `| Hit@1 | ${pct(overall.hit1)} |`,
+    `| Hit@3 | ${pct(overall.hit3)} |`,
+    `| Hit@5 | ${pct(overall.hit5)} |`,
+    `| MRR | ${overall.mrr.toFixed(3)} |`,
+    `| 返回空结果的用例占比 | ${pct(overall.emptyRate)} |`,
+    `| 平均 prompt tokens / 次 | ${Math.round(overall.avgPromptTokens)} |`,
+    `| 全量总 tokens | ${overall.totalTokens} |`,
+    `| 平均耗时 | ${Math.round(overall.avgMs)} ms |`,
+    '',
+    table('按候选池分层', byStratum),
+    '',
+    '> `in_pool` = 标准答案落在系统候选池（最近 30 条）内，考的是**匹配质量**。',
+    '> `out_pool` = 标准答案不在候选池里，考的是**召回能力** —— 这一层的失败和排序算法无关，',
+    '> 是压根没机会进入候选列表。',
+    '',
+    table('按难度分层', byDiff),
+    '',
+    '## 失败样例（前 10 条）',
+    '',
+  ];
+
+  const failed = ok.filter((r) => r.rank === 0).slice(0, 10);
+  if (!failed.length) {
+    md.push('（无）');
+  } else {
+    for (const r of failed) {
+      md.push(`- **[${r.stratum}/${r.difficulty}]** 「${r.query}」`);
+      md.push(`  - 标准答案：\`#${r.groundTruthId}\` ${r.groundTruthTitle}`);
+      md.push(`  - 实际返回：${r.returnedIds.length ? r.returnedIds.map((i) => '`#' + i + '`').join(', ') : '空'}`);
+    }
+  }
+
+  writeFileSync(`eval/report-${LABEL}.md`, md.join('\n') + '\n');
+
+  console.log('\n=== 总览 ===');
+  console.log(`Hit@1 ${pct(overall.hit1)} | Hit@3 ${pct(overall.hit3)} | Hit@5 ${pct(overall.hit5)} | MRR ${overall.mrr.toFixed(3)}`);
+  console.log(`平均 prompt tokens ${Math.round(overall.avgPromptTokens)} | 总 tokens ${overall.totalTokens} | 平均耗时 ${Math.round(overall.avgMs)}ms`);
+  console.log('\n=== 分层 ===');
+  for (const [k, s] of Object.entries(byStratum)) {
+    console.log(`${k.padEnd(10)} n=${s.n}  Hit@5 ${pct(s.hit5)}  MRR ${s.mrr.toFixed(3)}`);
+  }
+  console.log(`\n报告已写入 eval/report-${LABEL}.md`);
+}
+
+main();

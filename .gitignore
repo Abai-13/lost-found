@@ -23,3 +23,8 @@ src/main/resources/application-local.yml
 # 评测用的生成数据 —— 可由 eval/gen-items.js 重新生成，不入库
 eval/seed-items.sql
 eval/.gen-stats.txt
+
+# 评测脚本的临时文件
+eval/.smoke-body.json
+eval/.resp.json
+eval/.gen-stats.txt
