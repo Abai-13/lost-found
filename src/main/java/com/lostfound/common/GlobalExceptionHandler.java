@@ -3,6 +3,7 @@ package com.lostfound.common;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -34,6 +35,28 @@ public class GlobalExceptionHandler {
                 .orElse("参数校验失败");
         log.warn("参数校验失败: {}", msg);
         return Result.fail(ResultCode.BAD_REQUEST, msg);
+    }
+
+    /**
+     * 请求体读不出来 —— 不是合法 JSON，或者编码不是 UTF-8。
+     * <p>
+     * <b>为什么必须单独接住这个异常</b>：不接的话它会掉进最下面的兜底，
+     * 客户端的问题被报成 {@code 500 服务器内部错误}。
+     * <p>
+     * 实测踩到过：用 Git Bash 里的 curl 发带中文昵称的 JSON，
+     * 中文被按 GBK 编码发出去，Jackson 抛
+     * {@code JsonParseException: Invalid UTF-8 middle byte 0xeb}，
+     * 接口返回 500。于是排查方向整个跑偏 —— 去查了数据库表结构、
+     * 怀疑后端进程跑的是旧代码，唯独没想到「是我自己发的数据有问题」。
+     * <p>
+     * 这和 Redis 那个 bug 是同一类：<b>错误被归到了错误的层级</b>，
+     * 表面现象（500）和真实原因（客户端数据非法）差着十万八千里。
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Result<Void> handleUnreadableBody(HttpMessageNotReadableException e) {
+        log.warn("请求体无法解析（多半是 JSON 格式错或不是 UTF-8 编码）: {}", e.getMessage());
+        return Result.fail(ResultCode.BAD_REQUEST, "请求体格式不正确：不是合法的 JSON，或编码不是 UTF-8");
     }
 
     /** 路径参数/请求参数校验失败 */
