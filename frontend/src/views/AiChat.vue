@@ -7,6 +7,12 @@ import { categoryStyle } from '../utils/format'
 
 const router = useRouter()
 
+/**
+ * AI 接口专用超时。默认的 30s 不够 —— 后端一次模型调用正常 20~33s，
+ * 叠加读超时重试最坏能到 90s+。给足余量，避免「后端成功、前端报错」。
+ */
+const AI_TIMEOUT_MS = 120000
+
 // chat = 自由问答，query = 按描述匹配招领信息
 const mode = ref('query')
 const question = ref('')
@@ -72,7 +78,14 @@ async function ask(text) {
 
   try {
     // 两个接口路径不同，但请求体都是 { question }
-    const res = await request.post(`/ai/${mode.value}`, { question: q })
+    //
+    // ⚠️ 这里必须单独放宽超时：axios 实例默认 30s，但后端一次模型调用
+    //    正常就要 20~33s（免费档模型慢），且 read-timeout 30s × 最多 2 次重试，
+    //    最坏能到 90s+。用默认值会导致「后端还在跑、前端先掐断」，
+    //    用户看到"请求失败"，其实后端最后是成功的。
+    //    其他接口保持 30s 快速失败 —— 这是 AI 接口独有的长耗时特征。
+    const res = await request.post(
+      `/ai/${mode.value}`, { question: q }, { timeout: AI_TIMEOUT_MS })
     const d = res.data
 
     messages.value.push({
