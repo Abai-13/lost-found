@@ -109,7 +109,14 @@ Controller (接收请求、参数校验)
 | GET | /api/item?page=1&size=10&type=LOST&keyword=手机 | ❌ | 物品列表（分页+筛选） |
 | GET | /api/item/{id} | ❌ | 物品详情 |
 | PUT | /api/item/{id}/status?status=CLAIMED | ✅ | 修改物品状态（仅发布者） |
-| POST | /api/ai/chat | ❌ | AI 问答（暂未接入大模型） |
+| POST | /api/ai/chat | ✅ | AI 问答（已接入大模型） |
+| POST | /api/ai/query | ✅ | AI 物品匹配（2-gram 召回 + 大模型精排） |
+| GET | /api/item/my | ✅ | 我的发布 |
+| GET | /api/user/me | ✅ | 当前用户信息 |
+
+> ⚠️ **鉴权规则按 HTTP 方法分，不按接口分**（见 `JwtInterceptor`）：
+> `GET` 一律放行（公开浏览），`POST/PUT/DELETE` 必须有有效 token。
+> 所以 AI 的两个接口虽然是查询语义，但因为是 POST，也需要登录。
 
 ## 数据库
 

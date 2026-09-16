@@ -201,10 +201,14 @@ cd frontend && npm install && npm run dev    # http://localhost:5173
 | GET | `/api/item/{id}` | — | 物品详情 |
 | GET | `/api/item/my` | ✅ | 我的发布 |
 | PUT | `/api/item/{id}/status` | ✅ | 修改物品状态（仅发布者） |
-| POST | `/api/ai/chat` | — | AI 问答 |
-| POST | `/api/ai/query` | — | AI 物品匹配 |
+| POST | `/api/ai/chat` | ✅ | AI 问答 |
+| POST | `/api/ai/query` | ✅ | AI 物品匹配 |
 
-**认证方式：** 登录后拿到 token，请求头加 `Authorization: Bearer <token>`。GET 浏览类接口放开，写操作强制登录。
+**认证方式：** 登录后拿到 token，请求头加 `Authorization: Bearer <token>`。
+
+> ⚠️ **鉴权规则是按 HTTP 方法分的，不是按接口分的**：所有 `GET` 请求允许无 token 访问（公开浏览），
+> 所有 `POST / PUT / DELETE` 必须携带有效 token。所以 AI 的两个接口虽然是「查询语义」，但因为是 POST，**同样需要登录**。
+> 这条规则写在 `JwtInterceptor` 里 —— 之所以不逐个接口配置，是为了避免新增接口时漏配导致越权。
 
 ---
 
