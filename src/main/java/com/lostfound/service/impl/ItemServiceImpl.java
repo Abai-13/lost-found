@@ -18,6 +18,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -25,10 +29,27 @@ import java.util.List;
 public class ItemServiceImpl implements ItemService {
 
     private final ItemMapper itemMapper;
+
+    /**
+     * 页码上限。
+     * <p>
+     * 压测实测：深分页（offset 上万）会让优化器放弃 idx_created_at 改走全表扫描，
+     * EXPLAIN 为 {@code type=ALL, rows=125571, Extra=Using filesort}。
+     * 延迟关联能治标，但更根本的是——<b>这个场景本身就不该存在</b>：
+     * 失物招领不可能有人翻到第 2000 页。这里提前夹住，避免极端参数打穿数据库。
+     */
+    private static final int MAX_PAGE = 200;
+
     private void limitPageSize (ItemPageQuery query) {
         // 防止一次查询太多数据,超过50条就默认50条
         if (query.getSize()>50) {
             query.setSize(50);
+        }
+        // 防止深分页：页码越界直接夹到边界，不让 offset 无限变大
+        if (query.getPage() < 1) {
+            query.setPage(1);
+        } else if (query.getPage() > MAX_PAGE) {
+            query.setPage(MAX_PAGE);
         }
     }
 
@@ -65,7 +86,7 @@ public class ItemServiceImpl implements ItemService {
     public Page<Item> page(ItemPageQuery query) {
         limitPageSize (query);
         LambdaQueryWrapper<Item> wrapper = buildQueryWrapper(query);
-        return itemMapper.selectPage(
+        return selectPageByDeferredJoin(
                 new Page<>(query.getPage(), query.getSize()), wrapper);
     }
 
@@ -120,7 +141,7 @@ public class ItemServiceImpl implements ItemService {
         LambdaQueryWrapper<Item> wrapper = buildQueryWrapper(query);
         // 在公共筛选基础上，限定当前用户
         wrapper.eq(Item::getUserId, userId);
-        return itemMapper.selectPage(
+        return selectPageByDeferredJoin(
                 new Page<>(query.getPage(), query.getSize()), wrapper);
     }
 
@@ -150,6 +171,45 @@ public class ItemServiceImpl implements ItemService {
     }
 
     // ===================== 私有方法 =====================
+
+    /**
+     * 延迟关联分页 —— 解决深分页时优化器放弃索引、改走全表扫描的问题。
+     * <p>
+     * <b>原写法为什么慢</b>：{@code SELECT 所有列 ... ORDER BY created_at DESC LIMIT 10000,10}。
+     * 外层要取所有列 → 走 idx_created_at 就必须回表，offset 一大就等于一万次随机 IO；
+     * 优化器算完成本，干脆改用全表扫描 + filesort。EXPLAIN 实测：
+     * {@code type=ALL, key=NULL, rows=125571, Extra=Using filesort}。
+     * <p>
+     * <b>拆两步为什么快</b>：① 只查 id —— idx_created_at 的叶子节点里本来就存着 id，
+     * 是覆盖索引、不回表（EXPLAIN 显示 {@code Using index}），
+     * 所以哪怕 {@code LIMIT 120000,10} 优化器也愿意走索引；
+     * ② 只对这 size 个 id 回表取整行。
+     * <p>
+     * 回表次数：{@code offset + size} → {@code size}。
+     */
+    private Page<Item> selectPageByDeferredJoin(Page<Item> page, LambdaQueryWrapper<Item> wrapper) {
+        // ① 只查 id（覆盖索引，不回表）
+        wrapper.select(Item::getId);
+        Page<Item> idPage = itemMapper.selectPage(page, wrapper);
+
+        List<Item> idRecords = idPage.getRecords();
+        if (idRecords.isEmpty()) {
+            return idPage;
+        }
+
+        // ② 只对这几条 id 回表取完整行
+        List<Long> ids = idRecords.stream().map(Item::getId).toList();
+        Map<Long, Item> itemMap = itemMapper.selectBatchIds(ids).stream()
+                .collect(Collectors.toMap(Item::getId, Function.identity()));
+
+        // selectBatchIds 不保证返回顺序，按 id 的先后还原
+        // （id 本身就是按 created_at 排好序取出来的，所以还原后顺序和原来一致）
+        idPage.setRecords(ids.stream()
+                .map(itemMap::get)
+                .filter(Objects::nonNull)
+                .toList());
+        return idPage;
+    }
 
     /** 构建公共查询条件（type/category/status/keyword/排序） */
     private LambdaQueryWrapper<Item> buildQueryWrapper(ItemPageQuery query) {
