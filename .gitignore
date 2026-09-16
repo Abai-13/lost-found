@@ -28,3 +28,10 @@ eval/.gen-stats.txt
 eval/.smoke-body.json
 eval/.resp.json
 eval/.gen-stats.txt
+
+# 压测产物 —— .jtl 是 JMeter 原始采样日志，单轮 100MB+，
+# 每次压测重新生成，且超过 GitHub 单文件 100MB 上限（推不上去）。
+# 报告和压测计划才是有价值、可复现的部分，保留：
+#   bench/REPORT.md（结论）、bench/plan-*.jmx（压测计划）
+bench/*.jtl
+bench/*.log
