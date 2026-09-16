@@ -1,19 +1,138 @@
-# 校园失物招领与AI智能问答平台
+# 校园失物招领与 AI 智能问答平台
 
-校园场景下的失物招领服务平台，支持用户注册登录、物品发布/搜索/认领、AI 智能问答与物品匹配、图片上传。
+校园场景下的失物招领服务平台：注册登录、物品发布/搜索/认领、图片上传，并接入大模型实现 AI 智能问答与**物品自动匹配**。
 
-**技术栈：** Java 17 + Spring Boot 3.3 + MyBatis-Plus 3.5 + MySQL 8 + JWT + DeepSeek API
+**技术栈：** Java 17 · Spring Boot 3.3 · MyBatis-Plus 3.5 · MySQL 8 · Redis · JWT · 大模型 API · Vue 3 · Element Plus · Vite
+
+> 后端、前端、评测脚本、压测脚本均为独立完成。完整提交记录见本仓库 commit 历史。
 
 ---
 
 ## 功能
 
 - 用户注册 / 登录（JWT 认证 + BCrypt 密码加密）
-- 物品发布、分页搜索（按类型/关键词/时间排序）、详情查看
-- 物品状态修改（失物→已认领 / 招领→已领取），仅发布者可操作
-- AI 智能问答（接入 DeepSeek 大模型）
-- AI 物品匹配（用户描述失物 → 自动匹配招领信息）
-- 图片上传（格式校验 + 安全防护）
+- 物品发布（**含图片上传**）、分页搜索（按类型 / 分类 / 关键词 / 时间排序）、详情查看
+- 物品状态修改（未认领 → 已认领），服务端二次校验发布者身份，防止改他人帖子
+- 个人中心：我的发布列表
+- AI 智能问答：自由提问
+- **AI 物品匹配**：用自然语言描述丢失的东西（如「我的黑色苹果手机不见了」）→ 匹配库里的招领信息，返回结构化结果 + 匹配理由
+
+---
+
+## 性能（压测实测）
+
+在 **12.8 万行**物品数据下对最核心的读接口 `GET /api/item` 做压测（JMeter 非 GUI 模式），完整报告见 [`bench/REPORT.md`](./bench/REPORT.md)。
+
+### 深分页优化：延迟关联（Deferred Join）
+
+**问题**：分页主查询平均扫描 **122,667 行**（全表才 128,064 行）—— 它在全表扫描。
+
+```
+-- 浅分页 LIMIT 0,10
+EXPLAIN: type=index  key=idx_created_at  rows=10      Extra: Backward index scan  ✅
+
+-- 深分页 LIMIT 10000,10
+EXPLAIN: type=ALL    key=NULL            rows=125571  Extra: Using filesort       ❌
+```
+
+**根因是回表**：走 `idx_created_at` 需要回表 `offset + size` 次，offset 上万就是上万次随机 IO；而 `SELECT *` 必须回表才能拿到所有列。优化器算完成本，干脆改用全表扫描 + filesort。
+
+**做法**：把一条 SQL 拆成两步 —— ① 只查 `id`（`idx_created_at` 的叶子节点里就存着 id，是**覆盖索引**，不回表），② 只对这 `size` 条 id 回表取整行。**回表次数从 `offset + size` 降到 `size`。**
+
+| 指标 | 优化前 | 优化后 | 提升 |
+|---|---:|---:|---:|
+| 执行计划 | Table scan + Sort | Covering index scan | — |
+| 扫描行数 | 128,064 | **10,010** | — |
+| filesort | 125,571 行 | **无**（索引天然有序） | — |
+| SQL 耗时 | 542 ms | **5.41 ms** | **100×** |
+| 端到端平均响应 | 3,038 ms | **301 ms** | **10.1×** |
+| **QPS** | 11.3 | **123.3** | **10.9×** |
+
+> ⚠️ **SQL 层快了 100 倍，端到端只快 10 倍** —— 差额来自 `COUNT(*)`（41ms，占 SQL 总时间 54%）和序列化、连接池等固定开销。**只测一头会得出错误结论。**
+
+### 并发梯度：系统的工作点
+
+| 并发 | 响应时间 | QPS | 说明 |
+|---:|---:|---:|---|
+| 1 | 27 ms | 35.3 | 单请求基线 |
+| 10 | 39 ms | 195.8 | 接近线性扩展 |
+| **25** | **74 ms** | **252.2** | ⭐ **吞吐峰值** |
+| 50 | 299 ms | 124.3 | ⚠️ 过载，吞吐腰斩 |
+
+### 试过但**无效**的改动
+
+连接池 `10 → 50`：QPS **124.5 → 124.3**，平均响应 **299ms → 299ms**，没有任何变化。
+
+原因：`QPS × 单请求持有连接的时间 = 124 × 0.077s ≈ 9.5`，**10 个连接正好覆盖** —— 它一直在满负荷工作，而不是把请求堵在门外。
+
+> ⚠️ **这句话只回答「50 并发下够用」，不回答「10 个永远够用」。**
+> 25 并发那个更高吞吐的工作点（252 QPS）**没有单独复测连接池**，所以「10 个在那里够不够」是**未经验证的推断**。
+> 配置保留 `maximum-pool-size: 50` 是给更高吞吐留余量，**不是优化成果**。
+
+> 「先测量、再动手」比「照着经验帖调参」更值得写下来 —— 包括**写清楚哪一段是量出来的、哪一段只是推测**。
+
+### 压测方法上的两个坑
+
+1. **随机参数 ≠ 冷缓存** —— `page` 随机 1~2000 时，缓存 key 空间只有 2000 个，请求超过这个数后全部命中缓存。必须用 Redis 的 `keyspace_hits / keyspace_misses` 复核**到底压到了哪一层**（实测热缓存组 926,061 个请求，`keyspace_misses` 只增加 1）
+2. **停掉 Redis 制造未命中是错的** —— Lettuce 会挂起等 `command timeout`（3s × 读+写 = 6s），测出来的是 **Redis 超时，不是数据库**
+
+此外加 `MAX_PAGE = 200` 做工程止损：延迟关联是治标，**深分页这个场景本身就不该存在**（失物招领不可能有人翻到第 2000 页），提前夹住页码避免极端参数打穿数据库。
+
+> 📌 压测机为**本机**（JMeter / 后端 / MySQL / Redis 同一台），绝对数字受此限制；但**优化前后的对比是有效的**（两轮条件一致，并用缓存命中率复核过）。
+
+---
+
+## AI 物品匹配效果（可复现的评测）
+
+改造前后用**同一套评测集、同一套指标**横向对比，脚本在 [`eval/`](./eval/) 目录，可完整复现。
+
+### 评测集怎么来的
+
+从库里抽取物品 → 用大模型改写成**失主视角的模糊描述**（故意丢掉精确型号，例如把「iPhone 15 深空黑」写成「一个苹果手机」）→ 人工抽检。共 **146 条**，难度分三档：措辞差异 / 信息缺失 / 别名口语。标准答案是原物品 ID。
+
+> 先有基线才能量化。**没有基线的优化等于没有优化。**
+
+### 结果
+
+| 指标 | 基线 | 现在 |
+|---|---:|---:|
+| **Hit@5**（端到端命中率） | 19.2% | **93.2% ~ 94.5%** |
+| 召回率（标准答案进了候选列表） | — | **95.2%** |
+| 精排准确率 | — | 97.8% |
+| 平均 prompt tokens / 次 | 3,653 | 2,370 |
+
+**分阶段验证**（证明每一步各自的价值，一次只改一个变量）：
+
+```
+基线     Hit@5 19.2%   tokens 3653
+P2a 后   Hit@5 19.2%   tokens 1569   ← prompt 瘦身：只省成本，命中率不变（预期内）
+P2b 后   Hit@5 94.5%   tokens 2370   ← 召回重构：命中率的提升全部来自这一步
+```
+
+> ⚠️ **Hit@5 写成区间是有意的**：同一份代码跑两次分别是 94.5% 和 93.2%，**波动 ±1.3 个点**（`temperature=0` 并不保证输出确定）。小于这个幅度的改进一律不认，要重跑确认。
+
+### 关键改动
+
+- **候选召回**：从「取最近 30 条塞进 prompt」改为「全量召回 + 2-gram 打分」—— 原方案候选超过 30 条就漏召，且 token 成本随物品数线性上涨
+- **结构化返回**：匹配接口从只返回一段文字，改为返回 `matches` 数组（匹配度 + 匹配理由）+ 可观测信息（候选数 / 耗时 / 降级原因），前端据此渲染
+
+### 🔥 踩过的坑：降级吞掉了失败
+
+大模型超时 → 接口返回 HTTP 200 + 「AI 服务繁忙」→ **评测脚本把「调用失败」当成「未命中」算进了命中率** → 连续得出两个方向完全相反的错误结论。
+
+**修复**：响应体加 `degradeReason` 字段（`LLM_ERROR` / `NO_CANDIDATES`），评测脚本据此剔除失败样本，并把**降级率作为一等指标**输出。
+
+```bash
+node eval/run-eval.js <标签>      # 例：node eval/run-eval.js after-p2b
+```
+
+### 模型选型
+
+对比过 DeepSeek 与 Qwen2.5-7B（免费档）。Qwen 真实水平 84.2%，与 DeepSeek 差约 8 个点；**但真正的代价是可用性** —— 免费档降级率在 1.4% ~ 32.2% 之间剧烈波动（失败原因 `Read timed out`）。加重试（指数退避，只对超时 / 5xx / 429 重试，401/400 不重试）后降到 **0.0%**。
+
+供应商通过配置切换（`llm.api-url` / `api-key` / `model` 三项是一套），不写死在代码里。
+
+---
 
 ## 快速启动
 
@@ -22,91 +141,98 @@
 - JDK 17+
 - MySQL 8.x
 - Maven 3.6+
+- Redis（**可选**，不装也能跑 —— 连不上时自动降级直查数据库）
 
 ### 2. 配置数据库
 
 ```bash
-# 创建数据库（应用首次启动会自动建表，也可以手动执行 sql/schema.sql）
+# 应用首次启动会自动建库建表，也可以手动执行 sql/schema.sql
 mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS lost_found CHARACTER SET utf8mb4"
 ```
 
-修改 `src/main/resources/application.yml` 中的数据库用户名和密码。
+数据库账号密码可通过环境变量 `MYSQL_USERNAME` / `MYSQL_PASSWORD` 注入，或写入本地文件 `application-local.yml`（已 gitignore）。
 
 ### 3. 配置 AI（可选）
 
 ```bash
-# 不使用 AI 功能可以跳过，应用正常运行
+# 不配也能启动，AI 接口会返回兜底话术并带上降级原因
 export DEEPSEEK_API_KEY="your-api-key"
 ```
 
-### 4. 启动
+### 4. 启动后端
 
 ```bash
-mvn spring-boot:run
+mvn spring-boot:run        # http://localhost:8080
 ```
 
-应用启动在 `http://localhost:8080`。
+### 5. 启动前端
+
+```bash
+cd frontend && npm install && npm run dev    # http://localhost:5173
+```
+
+前端通过 Vite 代理转发 `/api` 到 8080，无需额外跨域配置。
+
+---
 
 ## 接口列表
 
 | 方法 | 路径 | 需登录 | 说明 |
 |------|------|:---:|------|
-| POST | /api/user/register | — | 注册 |
-| POST | /api/user/login | — | 登录，返回 JWT token |
-| POST | /api/item | ✅ | 发布物品 |
-| GET | /api/item | — | 物品列表（分页+筛选+排序） |
-| GET | /api/item/{id} | — | 物品详情 |
-| PUT | /api/item/{id}/status | ✅ | 修改物品状态（仅发布者） |
-| POST | /api/ai/chat | — | AI 问答 |
-| POST | /api/ai/query | — | AI 物品匹配 |
-| POST | /api/file/upload | ✅ | 上传图片 |
+| POST | `/api/user/register` | — | 注册 |
+| POST | `/api/user/login` | — | 登录，返回 JWT token |
+| GET | `/api/user/me` | ✅ | 当前用户信息 |
+| POST | `/api/item` | ✅ | 发布物品（multipart：`data` + 可选 `image`） |
+| GET | `/api/item` | — | 物品列表（分页 + 筛选 + 排序） |
+| GET | `/api/item/{id}` | — | 物品详情 |
+| GET | `/api/item/my` | ✅ | 我的发布 |
+| PUT | `/api/item/{id}/status` | ✅ | 修改物品状态（仅发布者） |
+| POST | `/api/ai/chat` | — | AI 问答 |
+| POST | `/api/ai/query` | — | AI 物品匹配 |
 
-**认证方式：** 登录后拿到 token，请求头加 `Authorization: Bearer <token>`。
+**认证方式：** 登录后拿到 token，请求头加 `Authorization: Bearer <token>`。GET 浏览类接口放开，写操作强制登录。
+
+---
 
 ## 项目结构
 
 ```
-src/main/java/com/lostfound/
-├── LostFoundApplication.java      # 启动入口
-├── common/                         # 公共组件
-│   ├── Result.java                # 统一返回体 {code, message, data}
-│   ├── ResultCode.java            # 状态码常量
-│   ├── BusinessException.java     # 业务异常
-│   └── GlobalExceptionHandler.java # 全局异常拦截
-├── config/                         # 配置
-│   ├── JwtConfig.java             # JWT 配置（密钥、过期时间）
-│   ├── JwtUtil.java               # JWT 工具（创建/解析/校验 token）
-│   ├── WebConfig.java             # CORS + 拦截器注册
-│   ├── DeepSeekConfig.java        # DeepSeek API 配置
-│   ├── RateLimitInterceptor.java  # 限流拦截器
-│   ├── MybatisPlusConfig.java     # 分页插件
-│   └── MyMetaObjectHandler.java   # 时间字段自动填充
-├── controller/                     # 接口层
-│   ├── UserController.java        # 注册/登录
-│   ├── ItemController.java        # 物品 CRUD
-│   └── AiController.java          # AI 问答/匹配
-├── service/                        # 业务逻辑层
-│   ├── UserService.java + impl
-│   ├── ItemService.java + impl
-│   ├── AiService.java + impl
-│   └── FileService.java + impl
-├── mapper/                         # 数据库访问层
-│   ├── UserMapper.java
-│   └── ItemMapper.java
-├── entity/                         # 数据库表映射
-│   ├── User.java
-│   └── Item.java
-├── dto/                            # 请求/响应对象
-│   ├── RegisterRequest.java
-│   ├── LoginRequest.java / LoginResponse.java
-│   ├── ItemCreateRequest.java
-│   ├── ItemPageQuery.java
-│   └── ChatRequest.java
-└── interceptor/
-    └── JwtInterceptor.java         # JWT 鉴权拦截器
+lost-found/
+├── src/main/java/com/lostfound/
+│   ├── common/                          # 公共组件
+│   │   ├── Result.java                  # 统一返回体 {code, message, data, timestamp}
+│   │   ├── ResultCode.java              # 状态码常量
+│   │   ├── BusinessException.java       # 业务异常
+│   │   ├── GlobalExceptionHandler.java  # 全局异常拦截（分类处理，不一律 500）
+│   │   └── RetrySupport.java            # 通用重试（退避策略，大模型与向量共用）
+│   ├── config/
+│   │   ├── JwtConfig.java / JwtUtil.java      # JWT 配置与工具
+│   │   ├── WebConfig.java                     # CORS + 拦截器 + 静态资源映射
+│   │   ├── LlmConfig.java                     # 大模型配置（供应商可切换）
+│   │   ├── EmbeddingConfig.java               # 向量服务配置
+│   │   ├── RedisConfig.java                   # 缓存序列化（注册 JavaTimeModule）
+│   │   ├── GracefulCacheErrorHandler.java     # 缓存异常降级，不让 Redis 拖垮服务
+│   │   ├── RateLimitInterceptor.java          # 限流拦截器
+│   │   ├── MybatisPlusConfig.java             # 分页插件
+│   │   └── MyMetaObjectHandler.java           # 时间字段自动填充
+│   ├── controller/                      # 接口层
+│   ├── service/                         # 业务层
+│   │   ├── CandidateService.java        # 候选召回（2-gram 打分）
+│   │   ├── EmbeddingService.java        # 向量化抽象（当前实现：云端 bge-m3）
+│   │   └── …                            # Item / User / Ai / File
+│   ├── mapper/  entity/  dto/           # 数据访问 / 表映射 / 请求响应对象
+│   └── interceptor/JwtInterceptor.java  # JWT 鉴权
+├── src/test/                            # 24 个测试（含 MockMvc 接口测试）
+├── frontend/                            # Vue 3 + Element Plus（5 个页面）
+├── eval/                                # AI 匹配评测：数据集 / 生成器 / 评测脚本 / 各阶段报告
+├── bench/                               # 压测：JMeter 计划 + REPORT.md
+├── docs/technical-notes.md              # 36 条项目技术笔记
+└── sql/schema.sql                       # 建表脚本（含索引）
 ```
 
-**调用链：** Controller → Service → Mapper → DB，拦截器在 Controller 之前执行鉴权。
+**调用链：** Controller → Service → Mapper → DB，`JwtInterceptor` 在 Controller 之前执行鉴权。
+
+---
 
 ## 数据库
 
@@ -135,26 +261,49 @@ src/main/java/com/lostfound/
 | image_url | VARCHAR(500) | 图片路径 |
 | contact | VARCHAR(100) | 联系方式 |
 | status | VARCHAR(20) | UNCLAIMED / CLAIMED |
+| version | INT | 乐观锁字段 |
+| created_at / updated_at | DATETIME | 自动填充 |
+
+索引：`idx_created_at`（分页默认按时间倒序）、`idx_type`、`idx_category`、`idx_status`、`idx_user_id`。
+
+---
 
 ## 设计决策
 
-几个关键的技术选择及理由：
-
-- **为什么不用 Spring Security？** 项目只需 JWT 登录认证，不需要角色权限、OAuth2 等。只引入加密库 + 手写拦截器，代码量少、好理解
-- **为什么用单体架构？** 校园场景用户量有限，单体足够。过早微服务会引入分布式事务、服务发现等额外复杂度
-- **为什么统一返回体？** 前端只需判断 code === 200，异常不靠 HTTP 500 返回，由全局异常处理器统一拦截转换
+- **为什么不用 Spring Security？** 项目只需 JWT 登录认证，不需要角色权限、OAuth2 等。只引入 `spring-security-crypto` 做 BCrypt + 手写拦截器，代码量少、好理解
+- **为什么用单体架构？** 校园场景用户量有限，单体 + 水平扩展足够。过早微服务会引入分布式事务、服务发现等额外复杂度，ROI 不高
+- **为什么统一返回体？** 前端只需判断 `code === 200`；异常不靠 HTTP 500 返回，由全局异常处理器统一拦截转换
 - **为什么 API Key 放环境变量？** 防止密钥泄露到 Git 仓库，生产环境可平滑迁移到配置中心
+- **为什么分页用延迟关联而不是直接加索引？** 索引早就有了，问题是**优化器主动放弃了它**。根因是回表成本，所以解法是降低回表次数，而不是再建一个索引
+- **为什么 Redis 挂了不报错，而是静默降级直查 DB？** 缓存是性能组件不是正确性组件，它挂了服务应该还能用。**但静默不等于不管** —— 被吞掉的异常必须可观测，否则你永远不知道缓存其实是坏的。这正是下面那个真实 bug 的教训
+- **为什么接口失败要带上 `degradeReason`？** 降级返回 HTTP 200 是合理的，但**调用方必须能区分「真的没匹配到」和「服务调用失败」**。两者混在一起，会让基于这批数据的任何统计结论都失真
 
-更完整的模块设计与取舍记录见 [docs/technical-notes.md](./docs/technical-notes.md)。
+更完整的模块设计与取舍记录见 [`docs/technical-notes.md`](./docs/technical-notes.md)。
+
+---
 
 ## 开发日志
 
 | 日期 | 内容 |
 |------|------|
-| 08-04 | 项目骨架 + JWT 认证 + 用户注册/登录 + CRUD 接口 |
-| 08-05 | 分页查询 + 条件筛选 + 排序 + 权限两层防护 |
-| 08-06 | 排序功能改造 + 设计决策记录 |
-| 08-07 | Git & GitHub 推送 + 简历制作 |
-| 08-08 | DeepSeek API 接入 + 限流拦截器 + 降级处理 |
-| 08-09 | AI 物品匹配 |
-| 08-10 | 图片上传（MultipartFile + UUID + 白名单校验） |
+| 08-07 | 项目骨架 + JWT 认证 + 用户注册/登录 + CRUD 接口 |
+| 08-08 | 接入 DeepSeek 大模型 + 限流拦截器 + 超时降级 |
+| 08-10 | 图片上传（MultipartFile + UUID 重命名 + 扩展名白名单 + 防路径穿越） |
+| 08-11 | 个人中心接口 + 抽取 `buildQueryWrapper` 消除三段重复的条件拼接 |
+| 08-12 | 乐观锁防止并发认领冲突（version 字段 + 重试）+ Redis 缓存 |
+| 08-31 | 缓存穿透修复（恢复空值缓存 + 详情判空抛异常）+ JUnit 单元测试 |
+| 09-05 | Vue 3 前端 5 个页面 + 缓存降级组件 + MockMvc 接口测试 |
+| 09-11 | 数据库凭据改走本地文件，不再明文入库；清理仓库中的个人信息 |
+| 09-15 | **AI 匹配迭代**：建评测集与基线 → prompt 瘦身 → 召回重构 → 加召回层指标 → 模型选型 → 重试与降级可观测 |
+| 09-15 | 修 Redis 序列化 bug（`LocalDateTime` 未注册 `JavaTimeModule`，缓存写入一直失败却被降级吞掉）；补 `created_at` / `category` 索引 |
+| 09-15 | 前端整体美化（卡片列表 / 聊天气泡 / 统一主题）+ 个人中心页面 |
+| 09-16 | **压测**：12.8 万行数据下定位深分页瓶颈，延迟关联优化（SQL 100×、端到端 10×）+ 并发梯度测试 |
+
+---
+
+## 已知问题 / 后续可做
+
+- `COUNT(*)` 平均 41ms，占 SQL 总时间 54% —— 可缓存计数结果，或前端改成「加载更多」不做总数
+- 限流器是内存实现：Map 的 key 从不清理（长时间运行会缓慢泄漏），且多实例部署时各算各的
+- 向量化能力已实现但**尚未接入召回链路**（当前召回用 2-gram 打分，效果已达 95.2% 召回率）
+- Docker 配置已写好（多阶段构建 + compose 三服务），但**尚未在真实环境验证过**
