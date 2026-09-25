@@ -4,6 +4,9 @@ target/
 # IDE files
 .idea/
 *.iml
+# 本机 IDEA 运行配置（前端 npm run dev 的快捷方式）—— 属个人开发习惯，
+# 和 .idea/ 一样不入库，面试官看仓库不需要它
+.run/
 
 # OS files
 .DS_Store
