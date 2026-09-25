@@ -43,11 +43,20 @@ public class GlobalExceptionHandler {
      * <b>为什么必须单独接住这个异常</b>：不接的话它会掉进最下面的兜底，
      * 客户端的问题被报成 {@code 500 服务器内部错误}。
      * <p>
-     * 实测踩到过：用 Git Bash 里的 curl 发带中文昵称的 JSON，
-     * 中文被按 GBK 编码发出去，Jackson 抛
-     * {@code JsonParseException: Invalid UTF-8 middle byte 0xeb}，
-     * 接口返回 500。于是排查方向整个跑偏 —— 去查了数据库表结构、
-     * 怀疑后端进程跑的是旧代码，唯独没想到「是我自己发的数据有问题」。
+     * 实测踩到过：用 curl 发一条带中文昵称的 JSON 测注册接口，接口返回 500。
+     * 根因是 <b>curl 在中文 Windows 上会把命令行参数按系统代码页转成字节</b>
+     * （本机代码页 936 = GBK），中文被发成 GBK 字节，Jackson 按 UTF-8 解析就抛
+     * {@code JsonParseException: Invalid UTF-8 middle byte 0xeb}。
+     * <p>
+     * <b>归因要准确：跟 Git Bash 无关</b> —— 换任何终端都一样，是 curl 在 Windows 上的行为。
+     * 对照实验（同一段 JSON，只改中文写在哪）：
+     * <ul>
+     *   <li>{@code -d '{"nickname":"白晨鑫"}'} → 服务端收到 {@code b0 d7 b3 bf f6 ce}（GBK）→ 500</li>
+     *   <li>{@code --data-binary @body-utf8.json} → 服务端收到 {@code e7 99 bd ...}（UTF-8）→ 200</li>
+     * </ul>
+     * <p>
+     * 当时排查方向整个跑偏 —— 去查了数据库表结构、怀疑后端进程跑的是旧代码，
+     * 唯独没想到「是我自己发的数据有问题」。因为返回的是 500，看上去就是服务端的锅。
      * <p>
      * 这和 Redis 那个 bug 是同一类：<b>错误被归到了错误的层级</b>，
      * 表面现象（500）和真实原因（客户端数据非法）差着十万八千里。
