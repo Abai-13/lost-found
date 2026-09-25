@@ -32,18 +32,24 @@ const MODE_META = {
     title: 'AI 问答',
     icon: 'ChatDotRound',
     tip: '随便问，AI 帮你解答校园失物招领相关的问题。',
+    sub: '试试这样问：',
     placeholder: '比如：捡到东西应该交到哪里？',
     samples: ['捡到东西应该交到哪里？', '校园卡丢了怎么补办？', '贵重物品丢了要报警吗？'],
   },
   query: {
     title: 'AI 物品匹配',
     icon: 'MagicStick',
-    tip: '描述你丢的东西，AI 会从全站招领信息里帮你找。描述越具体越准。',
-    placeholder: '比如：一个黑色双肩包，昨天下午在图书馆三楼丢的',
+    tip: '说得越具体越容易找到 —— 颜色 / 品牌型号 / 在哪丢 / 一眼能认出的特征',
+    sub: '这样说最容易找到：',
+    placeholder: '比如：一把银色的钥匙，圆头的，落在二教阶梯教室',
+    // ⚠️ 例子本身就是提示语，别写成「一个黑色双肩包，昨天在图书馆丢的」这种。
+    //    召回的 2-gram 是靠字面撞的，例子必须示范「库里标题实际会写哪些词」：
+    //    颜色、品牌型号、具体地点，以及最关键的一眼可辨特征（圆头 / 封面卷边 / G502）。
+    //    用户会照着例子写，例子写成什么样，用户就描述成什么样。
     samples: [
-      '一个黑色双肩包，昨天在图书馆丢的',
-      '有没有人看到我的本子啊，蓝色的那种',
-      '我的校园卡不见了，好像是在食堂',
+      '一把银色的车钥匙，圆头的，落在二教阶梯教室',
+      '绿色的罗技 G502 鼠标，昨天下午落在食堂了',
+      '一本汤小丹的操作系统教材，封面有点卷边',
     ],
   },
 }
@@ -130,7 +136,7 @@ function scoreColor(score) {
   <div class="lf-page ai-page">
     <div class="lf-page-head">
       <h1 class="lf-page-title">AI 助手</h1>
-      <p class="lf-page-sub">基于语义召回的智能匹配 —— 用大白话描述，帮你找到可能匹配的失物信息</p>
+      <p class="lf-page-sub">用大白话描述你丢的东西，AI 帮你从全站招领信息里找</p>
     </div>
 
     <div class="lf-panel shell">
@@ -155,7 +161,7 @@ function scoreColor(score) {
             <el-icon><component :is="meta.icon" /></el-icon>
           </div>
           <div class="welcome-title">{{ meta.title }}</div>
-          <div class="welcome-sub">试试这样问：</div>
+          <div class="welcome-sub">{{ meta.sub }}</div>
           <div class="samples">
             <button v-for="s in meta.samples" :key="s" class="sample" @click="ask(s)">
               {{ s }}
